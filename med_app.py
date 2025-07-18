@@ -1,8 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
-import rapidfuzz
-from rapidfuzz import process
+from rapidfuzz import process, fuzz
 
 @st.cache_resource
 def load_data():
@@ -11,12 +10,29 @@ def load_data():
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
-def fuzzy_find_best_match(user_input, disease_names, threshold=75):
+def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
     if not user_input or not disease_names:
         return None, 0
-    matches = process.extract(user_input, disease_names, limit=1, score_cutoff=threshold)
-    if matches:
-        return matches[0][0], matches[0][1]
+
+    input_clean = user_input.lower().strip()
+    # Filter out very short disease names to avoid trivial matches
+    candidate_names = [d for d in disease_names if len(d) >= min_length]
+
+    # Get top 5 matches with weighted ratio scorer
+    matches = process.extract(
+        input_clean,
+        candidate_names,
+        scorer=fuzz.WRatio,
+        limit=5,
+        score_cutoff=threshold
+    )
+
+    input_len = len(input_clean)
+    # Return the first match with sufficiently long length compared to input
+    for match, score, _ in matches:
+        if len(match) >= 0.7 * input_len:
+            return match, score
+
     return None, 0
 
 @st.cache_data(show_spinner=False)
@@ -43,7 +59,7 @@ def fetch_drug_contraindications(disease, max_results=50):
     except Exception:
         return []
 
-# Initialize session state variables for user input and corrected match
+# Session state to keep user input and corrected match stable
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
 
@@ -60,13 +76,11 @@ st.markdown(
 
 df, disease_names = load_data()
 
-# Use session_state to control the input text box value
 user_input = st.text_input("Enter a disease or illness:", value=st.session_state.user_text, key="input_text")
 
-# Update session state if input changed
 if user_input != st.session_state.user_text:
     st.session_state.user_text = user_input
-    st.session_state.corrected_match = ''  # reset corrected match on new input
+    st.session_state.corrected_match = ''
 
 if st.session_state.user_text:
     match, score = fuzzy_find_best_match(st.session_state.user_text, disease_names)
@@ -74,14 +88,13 @@ if st.session_state.user_text:
         st.warning(f"No matches found for '{st.session_state.user_text}'. Please check spelling.")
         st.session_state.corrected_match = ''
     else:
-        # Only update corrected_match if different from user input
         if match.lower() != st.session_state.user_text.lower():
             st.info(f"Did you mean **{match}**? Results shown for closest match.")
         st.session_state.corrected_match = match
 
         with st.spinner(f"Searching FDA contraindications for {match}..."):
             drugs = fetch_drug_contraindications(match)
-        
+
         if drugs:
             drug_df = pd.DataFrame(drugs)
             drug_df['brand_name'] = drug_df['brand_name'].astype(str).str.strip()
@@ -98,6 +111,7 @@ if st.session_state.user_text:
                 st.info(f"No drugs with brand or generic names found for '{match}'.")
         else:
             st.info(f"No FDA medication label lists '{match}' in its contraindications.")
+
 
 #--------------------------------------------------------------------------------------------------
 # import os
