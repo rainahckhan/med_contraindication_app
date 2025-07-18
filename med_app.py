@@ -42,37 +42,36 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Try exact match first
+    # 1. Exact match
     for d in candidate_names:
         if d.lower() == input_clean:
             return d, 100
 
-    # 2. Try substring match on whole words (word boundary)
+    # 2. Fuzzy match among names with length difference at most 1
+    similar_length_names = [
+        d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
+    ]
+    fuzzy_matches = process.extract(
+        input_clean,
+        similar_length_names,
+        scorer=fuzz.WRatio,
+        limit=3,
+        score_cutoff=threshold
+    )
+    if fuzzy_matches:
+        best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
+        return best_match, best_score
+
+    # 3. Word-boundary substring match, but only if there's no shorter match
     pattern = re.compile(rf'\b{re.escape(input_clean)}\b')
     substr_matches = [d for d in candidate_names if pattern.search(d.lower())]
     if substr_matches:
-        # Pick shortest substring match to avoid overly long disease names
+        # Only return if no word is shorter than the input (avoid "anxiety dementia" for "anxiety")
         best_substr_match = min(substr_matches, key=len)
-        return best_substr_match, 100
+        if len(best_substr_match) == len(input_clean):
+            return best_substr_match, 100
 
-    # 3. Fuzzy match on candidates with length close to input length (+-30%)
-    close_length_names = [d for d in candidate_names if 0.7 <= len(d) / len(input_clean) <= 1.3]
-
-    matches = process.extract(
-        input_clean,
-        close_length_names,
-        scorer=fuzz.WRatio,
-        limit=5,
-        score_cutoff=threshold
-    )
-
-    if matches:
-        best_match, best_score, _ = max(matches, key=lambda x: x[1])
-        return best_match, best_score
-
-    # No matches found
     return None, 0
-
 
 
 @st.cache_data(show_spinner=False)
