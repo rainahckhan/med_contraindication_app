@@ -39,28 +39,31 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Try substring match first (case-insensitive)
-    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
-    if substr_matches:
-        # If multiple matches, pick the shortest match (closest concept)
-        best_substr_match = min(substr_matches, key=len)
-        return best_substr_match, 100  # perfect score for substring match
+    # 1. Try exact or near-exact match (allowing minor typos) first via fuzzy ratio
+    # Only consider matches with length close to input length (within +/-30%)
+    close_length_names = [d for d in candidate_names if 0.7 <= len(d) / len(input_clean) <= 1.3]
 
-    # 2. Fallback to fuzzy matching allowing small typos
     matches = process.extract(
         input_clean,
-        candidate_names,
+        close_length_names,
         scorer=fuzz.WRatio,
         limit=5,
         score_cutoff=threshold
     )
 
-    input_len = len(input_clean)
-    for match, score, _ in matches:
-        # Ensure match is not a drastically longer unrelated disease
-        if len(match) >= 0.7 * input_len:
-            return match, score
+    if matches:
+        # Pick best match among these
+        best_match, best_score, _ = max(matches, key=lambda x: x[1])
+        return best_match, best_score
 
+    # 2. If no suitable fuzzy match with close length, fallback to substring search with length filtering
+    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
+    if substr_matches:
+        # Choose shortest substring match
+        best_substr_match = min(substr_matches, key=len)
+        return best_substr_match, 100
+
+    # 3. Otherwise no match found
     return None, 0
 
 
