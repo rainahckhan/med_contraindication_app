@@ -10,3 +10,7 @@ This app uses spaCy to parse information from the OpenFDA Api, particularly the 
 Overall, I hope this app can be of at least a little bit of use to the average person, even if it's just to get them to ask questions at their next routine checkup. The healthcare system can sometimes feel inaccessible and both doctors and patients do not have all the time in the world to ponder every possibility so this app is to eliminate at least one of those possibilities.
 
 Disclaimer: This information cannot substitute advice from a trained medical professional.
+
+Attached below is a link to the app:
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://medcontraindicationapp-cw23vsc8c8kscrmeizyjwx.streamlit.app)
