@@ -85,16 +85,16 @@ user_input = st.text_input(
     on_change=on_input_change
 )
 
-# Sync session state user_text with widget input
-st.session_state.user_text = user_input
+# Do NOT assign st.session_state.user_text = user_input here!
+# Streamlit already manages this for you based on the 'key'
 
-if st.session_state.user_text:
-    match, score = fuzzy_find_best_match(st.session_state.user_text, disease_names)
+if user_input:
+    match, score = fuzzy_find_best_match(user_input, disease_names)
     if not match:
-        st.warning(f"No matches found for '{st.session_state.user_text}'. Please check spelling.")
+        st.warning(f"No matches found for '{user_input}'. Please check spelling.")
         st.session_state.corrected_match = ''
     else:
-        if match.lower() != st.session_state.user_text.lower():
+        if match.lower() != user_input.lower():
             st.info(f"Did you mean **{match}**? Results shown for closest match.")
         st.session_state.corrected_match = match
 
