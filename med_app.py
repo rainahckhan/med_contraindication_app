@@ -1,6 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
+import re
 from rapidfuzz import process, fuzz
 
 @st.cache_resource
@@ -32,6 +33,8 @@ def load_data():
 
     # return None, 0
 
+
+
 def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
     if not user_input or not disease_names:
         return None, 0
@@ -39,8 +42,20 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Try exact or near-exact match (allowing minor typos) first via fuzzy ratio
-    # Only consider matches with length close to input length (within +/-30%)
+    # 1. Try exact match first
+    for d in candidate_names:
+        if d.lower() == input_clean:
+            return d, 100
+
+    # 2. Try substring match on whole words (word boundary)
+    pattern = re.compile(rf'\b{re.escape(input_clean)}\b')
+    substr_matches = [d for d in candidate_names if pattern.search(d.lower())]
+    if substr_matches:
+        # Pick shortest substring match to avoid overly long disease names
+        best_substr_match = min(substr_matches, key=len)
+        return best_substr_match, 100
+
+    # 3. Fuzzy match on candidates with length close to input length (+-30%)
     close_length_names = [d for d in candidate_names if 0.7 <= len(d) / len(input_clean) <= 1.3]
 
     matches = process.extract(
@@ -52,19 +67,12 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     )
 
     if matches:
-        # Pick best match among these
         best_match, best_score, _ = max(matches, key=lambda x: x[1])
         return best_match, best_score
 
-    # 2. If no suitable fuzzy match with close length, fallback to substring search with length filtering
-    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
-    if substr_matches:
-        # Choose shortest substring match
-        best_substr_match = min(substr_matches, key=len)
-        return best_substr_match, 100
-
-    # 3. Otherwise no match found
+    # No matches found
     return None, 0
+
 
 
 @st.cache_data(show_spinner=False)
