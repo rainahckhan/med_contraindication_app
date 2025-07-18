@@ -1,0 +1,9 @@
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# IDE and system files
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
