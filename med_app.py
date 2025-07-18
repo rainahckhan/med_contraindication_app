@@ -1,12 +1,12 @@
+import os
 import streamlit as st
 import pandas as pd
-from rapidfuzz import process, fuzz
-
 
 @st.cache_resource
 def load_data():
-    # Change to .read_parquet if using Parquet (recommended)
-    df = pd.read_parquet(r"C:\Users\slk20\Documents\Drug Interaction App\icd10_preprocessed.parquet")
+    # Build the path to the parquet file relative to this script's location
+    parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
+    df = pd.read_parquet(parquet_path)
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
