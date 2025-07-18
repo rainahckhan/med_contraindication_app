@@ -12,10 +12,6 @@ def load_data():
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
-st.write(f"disease_names type: {type(disease_names)}, count: {len(disease_names)}")
-st.write("Sample:", disease_names[:5])
-st.write(f"user_input: '{user_input}' of type {type(user_input)}")
-
 def fuzzy_find_best_match(user_input, disease_names, threshold=75):
     if not user_input or not disease_names:
         return None, 0
