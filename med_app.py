@@ -1,6 +1,8 @@
 import os
 import streamlit as st
 import pandas as pd
+import rapidfuzz
+from rapidfuzz import process
 
 @st.cache_resource
 def load_data():
@@ -10,8 +12,13 @@ def load_data():
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
+st.write(f"disease_names type: {type(disease_names)}, count: {len(disease_names)}")
+st.write("Sample:", disease_names[:5])
+st.write(f"user_input: '{user_input}' of type {type(user_input)}")
 
 def fuzzy_find_best_match(user_input, disease_names, threshold=75):
+    if not user_input or not disease_names:
+        return None, 0
     matches = process.extract(user_input, disease_names, limit=1, score_cutoff=threshold)
     if matches:
         return matches[0][0], matches[0][1]
@@ -53,9 +60,13 @@ st.markdown(
 )
 df, disease_names = load_data()
 
+st.write(f"disease_names type: {type(disease_names)}, count: {len(disease_names)}")
+st.write("Sample:", disease_names[:5])
+
 
 user_input = st.text_input("Enter a disease or illness:")
 
+st.write(f"user_input: '{user_input}' of type {type(user_input)}")
 
 if user_input:
     match, score = fuzzy_find_best_match(user_input, disease_names)
