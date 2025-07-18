@@ -18,7 +18,7 @@ from tqdm import tqdm
 # 1. Parameters
 # -------------------
 infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10OrderFiles2025_0\icd10cm_order_2025.txt"
-outfile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10_preprocessed.parquet"   # Use .csv if you prefer!
+outfile = r"icd10_preprocessed.parquet"   # Use .csv if you prefer!
 
 # -------------------
 # 2. Helpers
