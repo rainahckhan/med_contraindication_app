@@ -15,10 +15,8 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
         return None, 0
 
     input_clean = user_input.lower().strip()
-    # Filter out very short disease names to avoid trivial matches
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # Get top 5 matches with weighted ratio scorer
     matches = process.extract(
         input_clean,
         candidate_names,
@@ -28,7 +26,6 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     )
 
     input_len = len(input_clean)
-    # Return the first match with sufficiently long length compared to input
     for match, score, _ in matches:
         if len(match) >= 0.7 * input_len:
             return match, score
@@ -59,12 +56,16 @@ def fetch_drug_contraindications(disease, max_results=50):
     except Exception:
         return []
 
-# Session state to keep user input and corrected match stable
+# Initialize session state keys and defaults
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
 
 if 'corrected_match' not in st.session_state:
     st.session_state.corrected_match = ''
+
+# Callback to handle input changes and clear corrected_match
+def on_input_change():
+    st.session_state.corrected_match = ''  # Reset corrected match on new input
 
 st.title("Medication Contraindication Checker (Information Obtained from OpenFDA API)")
 st.write("Enter an illness to see which medications adversely interact with it (FDA label contraindications).")
@@ -76,11 +77,16 @@ st.markdown(
 
 df, disease_names = load_data()
 
-user_input = st.text_input("Enter a disease or illness:", value=st.session_state.user_text, key="input_text")
+# Controlled text input with key and on_change callback
+user_input = st.text_input(
+    "Enter a disease or illness:",
+    value=st.session_state.user_text,
+    key='user_text',
+    on_change=on_input_change
+)
 
-if user_input != st.session_state.user_text:
-    st.session_state.user_text = user_input
-    st.session_state.corrected_match = ''
+# Sync session state user_text with widget input
+st.session_state.user_text = user_input
 
 if st.session_state.user_text:
     match, score = fuzzy_find_best_match(st.session_state.user_text, disease_names)
@@ -111,6 +117,7 @@ if st.session_state.user_text:
                 st.info(f"No drugs with brand or generic names found for '{match}'.")
         else:
             st.info(f"No FDA medication label lists '{match}' in its contraindications.")
+
 
 
 #--------------------------------------------------------------------------------------------------
