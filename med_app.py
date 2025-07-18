@@ -133,7 +133,7 @@ user_input = st.text_input(
 if user_input:
     match, score = fuzzy_find_best_match(user_input, disease_names)
     if not match:
-        st.warning(f"No matches found for '{user_input}'. Please check spelling.")
+        st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
         st.session_state.corrected_match = ''
     else:
         if match.lower() != user_input.lower():
@@ -156,7 +156,7 @@ if user_input:
                 st.success(f"Drugs contraindicated for **{match}**, please consult a doctor before using:")
                 st.dataframe(deduped[["brand_name", "generic_name"]])
             else:
-                st.info(f"No drugs with brand or generic names found for '{match}'. Maybe try a more specific wording?")
+                st.info(f"No drugs with brand or generic names found for '{match}'.")
         else:
             st.info(f"No FDA medication label lists '{match}' in its contraindications.")
 
