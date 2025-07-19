@@ -1,8 +1,7 @@
 import os
 import streamlit as st
 import pandas as pd
-import numpy as np # Used by Streamlit for session_state, etc.
-# Import everything from your new backend module
+import numpy as np
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 
 # ---------------------------
@@ -14,6 +13,26 @@ def cached_load_app_assets():
     return load_app_assets()
 
 df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
+
+# ---------
+# Helper function to simplify disease term for API query
+def simplify_disease_term(matched_disease, user_input):
+    """
+    Extract core keyword(s) from matched disease for API query.
+    Strategy:
+    - Return words from matched_disease that appear in user_input (case insensitive)
+    - If none found, fallback to longest word in matched_disease
+    """
+    matched_words = matched_disease.lower().split()
+    input_words = user_input.lower().split()
+
+    common_words = [w for w in matched_words if w in input_words]
+    if common_words:
+        return " ".join(common_words)
+
+    # fallback: return longest word from matched_disease
+    longest_word = max(matched_words, key=len)
+    return longest_word
 
 # ---------------------------
 # 2. Streamlit UI
@@ -33,8 +52,6 @@ st.write("Enter an illness to see medications with possible safety concerns rela
 st.markdown(
     "<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small><br><br>",
     unsafe_allow_html=True)
-
-
 
 user_input = st.text_input(
     "Enter disease or illness:",
@@ -62,18 +79,19 @@ if user_input:
 
         st.session_state.corrected_match = match
 
-        with st.spinner(f"Searching FDA medication safety info for {match}..."):
-            # Use the FDA fetch function from the backend
-            drugs = fetch_drug_contraindications(match)
+        # Simplify the matched disease term before querying API
+        keyword_for_api = simplify_disease_term(match, user_input)
+        
+        with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
+            # Use the FDA fetch function from the backend with simplified keyword
+            drugs = fetch_drug_contraindications(keyword_for_api)
 
         if drugs:
             drug_df = pd.DataFrame(drugs) # Already deduplicated and formatted by backend function
-            st.success(f"Drugs with safety concerns related to **{match}** (from FDA):")
+            st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
             st.dataframe(drug_df[["brand_name", "generic_name"]])
         else:
-            st.info(f"No FDA medication labels mentioning '{match}' found in contraindications or related fields.")
-
-
+            st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
 # import os
 # import streamlit as st
 # import pandas as pd
