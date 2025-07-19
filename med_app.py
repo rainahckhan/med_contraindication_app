@@ -12,24 +12,24 @@ from rapidfuzz import process, fuzz
 # ---------------------------
 
 @st.cache_resource(show_spinner=True)
+
 def load_icd_data_and_model():
     parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
     df = pd.read_parquet(parquet_path)
     disease_names = df['Description'].dropna().tolist()
 
-    # Load embedding model
-    model = SentenceTransformer('sentence-transformers/biobert-base-cased-v1')
+    # Load biomedical sentence-transformer model (make sure it matches your backend)
+    model = SentenceTransformer('pritamdeka/S-BioBert-snli-multinli-stsb')
 
-    # Embed disease names (normalized for cosine similarity)
     embeddings = model.encode(disease_names, normalize_embeddings=True)
     embeddings = embeddings.astype(np.float32)
 
-    # Build FAISS index for cosine similarity (inner product on normalized vectors)
     dimension = embeddings.shape[1]
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings)
 
     return df, disease_names, model, embeddings, index
+
 
 # Load once and cache
 df, disease_names, model, disease_embeddings, faiss_index = load_icd_data_and_model()
@@ -181,7 +181,6 @@ if user_input:
                 st.info(f"No drugs found mentioning '{match}' in warnings, contraindications, or adverse reactions.")
         else:
             st.info(f"No FDA medication labels mentioning '{match}' found.")
-
 
 
 
