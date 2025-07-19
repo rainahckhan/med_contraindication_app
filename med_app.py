@@ -11,6 +11,7 @@ def load_data():
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
+st.cache_data.clear()
 # def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
 #     if not user_input or not disease_names:
 #         return None, 0
