@@ -8,8 +8,11 @@ from rapidfuzz import process, fuzz
 def load_data():
     parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
     df = pd.read_parquet(parquet_path)
-    disease_names = sorted(df['GeneralDisease'].dropna().unique())
+
+    # Use the official Description column from the new file
+    disease_names = sorted(df['Description'].dropna().unique())
     return df, disease_names
+
 
 st.cache_data.clear()
 # def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
@@ -66,16 +69,12 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4,
     # 3. Substring matches anywhere
     substr_matches = [d for d in candidate_names if input_clean in d.lower()]
     if substr_matches:
-        # If popularity_dict provided, sort by popularity descending
         if popularity_dict:
             substr_matches.sort(key=lambda x: popularity_dict.get(x.lower(), 0), reverse=True)
         else:
-            # fallback: shorter names first as proxy for popularity
             substr_matches.sort(key=len)
+        return substr_matches[0], 85
 
-        return substr_matches[0], 85  # confidence score indicating fallback substring match
-
-    # No match at all
     return None, 0
 
 
@@ -84,7 +83,7 @@ def fetch_drug_contraindications(disease, max_results=50):
     import requests
     url = 'https://api.fda.gov/drug/label.json'
     params = {
-        'search': f'contraindications:{disease}',
+        'search': f'contraindications:"{disease}"',
         'limit': max_results
     }
     try:
@@ -103,16 +102,14 @@ def fetch_drug_contraindications(disease, max_results=50):
     except Exception:
         return []
 
-# Initialize session state keys and defaults
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
 
 if 'corrected_match' not in st.session_state:
     st.session_state.corrected_match = ''
 
-# Callback to handle input changes and clear corrected_match
 def on_input_change():
-    st.session_state.corrected_match = ''  # Reset corrected match on new input
+    st.session_state.corrected_match = ''
 
 st.title("Medication Contraindication Checker (Information Obtained from OpenFDA API)")
 st.write("Enter an illness to see which medications adversely interact with it (FDA label contraindications).")
@@ -131,7 +128,6 @@ st.markdown(
 
 df, disease_names = load_data()
 
-# Controlled text input with key and on_change callback
 user_input = st.text_input(
     "Enter a disease or illness:",
     value=st.session_state.user_text,
@@ -139,30 +135,18 @@ user_input = st.text_input(
     on_change=on_input_change
 )
 
-# Do NOT assign st.session_state.user_text = user_input here!
-# Streamlit already manages this for you based on the 'key'
-
-# if user_input:
-#     match, score = fuzzy_find_best_match(user_input, disease_names)
-#     if not match:
-#         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
-#         st.session_state.corrected_match = ''
-#     else:
-#         if match.lower() != user_input.lower():
-#             st.info(f"Did you mean **{match}**? Results shown for closest match.")
-#         st.session_state.corrected_match = match
-
-#         with st.spinner(f"Searching FDA contraindications for {match}..."):
-#             drugs = fetch_drug_contraindications(match)
 if user_input:
     match, score = fuzzy_find_best_match(user_input, disease_names)
     if not match:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
         st.session_state.corrected_match = ''
     else:
-        # Notify only if suggested match differs case-insensitive or score < 100
+        # Get ICD code corresponding to matched description
+        icd_code_row = df[df['Description'] == match]
+        icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
+        
         if match.lower() != user_input.lower() or score < 100:
-            st.info(f"Did you mean **{match}**? Results shown for closest match.")
+            st.info(f"Did you mean **{match}** (ICD-10-CM code: {icd_code})? Results shown for closest match.")
         st.session_state.corrected_match = match
 
         with st.spinner(f"Searching FDA contraindications for {match}..."):
