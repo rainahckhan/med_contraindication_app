@@ -1,20 +1,56 @@
 import os
 import streamlit as st
 import pandas as pd
-import re
+import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
+import requests
 from rapidfuzz import process, fuzz
 
+# ---------------------------
+# 1. Load ICD-10 Data, Embeddings & Build FAISS Index
+# ---------------------------
 
-@st.cache_resource
-def load_data():
+@st.cache_resource(show_spinner=True)
+def load_icd_data_and_model():
     parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
     df = pd.read_parquet(parquet_path)
-    disease_names = sorted(df['Description'].dropna().unique())
-    return df, disease_names
+    disease_names = df['Description'].dropna().tolist()
 
-st.cache_data.clear()
+    # Load embedding model
+    model = SentenceTransformer('sentence-transformers/biobert-base-cased-v1')
 
-def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4, popularity_dict=None):
+    # Embed disease names (normalized for cosine similarity)
+    embeddings = model.encode(disease_names, normalize_embeddings=True)
+    embeddings = embeddings.astype(np.float32)
+
+    # Build FAISS index for cosine similarity (inner product on normalized vectors)
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dimension)
+    index.add(embeddings)
+
+    return df, disease_names, model, embeddings, index
+
+# Load once and cache
+df, disease_names, model, disease_embeddings, faiss_index = load_icd_data_and_model()
+
+# ---------------------------
+# 2. Semantic + Fuzzy Matching logic
+# ---------------------------
+
+def semantic_search(query, top_k=5, score_threshold=0.6):
+    query_embedding = model.encode([query], normalize_embeddings=True).astype(np.float32)
+    distances, indices = faiss_index.search(query_embedding, top_k)
+    results = []
+    for dist, idx in zip(distances[0], indices[0]):
+        if dist >= score_threshold:  # Filter low similarity matches
+            results.append({
+                'disease': disease_names[idx],
+                'score': float(dist)
+            })
+    return results
+
+def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
     if not user_input or not disease_names:
         return None, 0
 
@@ -27,16 +63,8 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4,
             return d, 100
 
     # 2. Fuzzy match with threshold
-    similar_length_names = [
-        d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
-    ]
-    fuzzy_matches = process.extract(
-        input_clean,
-        similar_length_names,
-        scorer=fuzz.WRatio,
-        limit=5,
-        score_cutoff=threshold
-    )
+    similar_length_names = [d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1]
+    fuzzy_matches = process.extract(input_clean, similar_length_names, scorer=fuzz.WRatio, limit=5, score_cutoff=threshold)
     if fuzzy_matches:
         best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
         return best_match, best_score
@@ -44,30 +72,36 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4,
     # 3. Substring matches anywhere
     substr_matches = [d for d in candidate_names if input_clean in d.lower()]
     if substr_matches:
-        if popularity_dict:
-            substr_matches.sort(key=lambda x: popularity_dict.get(x.lower(), 0), reverse=True)
-        else:
-            substr_matches.sort(key=len)
+        substr_matches.sort(key=len)
         return substr_matches[0], 85
 
     return None, 0
 
+def find_best_match(user_input, disease_names):
+    # First try semantic matching
+    sem_results = semantic_search(user_input, top_k=3)
+    if sem_results:
+        # Choose best semantic match if similarity above threshold
+        best_sem = sem_results[0]
+        if best_sem['score'] >= 0.65:
+            return best_sem['disease'], best_sem['score'] * 100  # scale similarity to 0-100
+    # Fallback to fuzzy if no good semantic match
+    return fuzzy_find_best_match(user_input, disease_names)
+
+# ---------------------------
+# 3. FDA contraindication fetch function (unchanged)
+# ---------------------------
 
 @st.cache_data(show_spinner=False)
 def fetch_drug_contraindications(disease, max_results=50):
-    import requests
     url = 'https://api.fda.gov/drug/label.json'
-    # Multi-field search query excluding indications_and_usage
     search_query = (
         f'contraindications:"{disease}"'
         f' OR warnings:"{disease}"'
         f' OR precautions:"{disease}"'
         f' OR adverse_reactions:"{disease}"'
     )
-    params = {
-        'search': search_query,
-        'limit': max_results
-    }
+    params = {'search': search_query, 'limit': max_results}
     try:
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
@@ -79,17 +113,16 @@ def fetch_drug_contraindications(disease, max_results=50):
             drugs.append({
                 'brand_name': info.get('brand_name', [''])[0],
                 'generic_name': info.get('generic_name', [''])[0],
-                # Optionally, add these if you want to show context:
-                # 'contraindications': ' '.join(entry.get('contraindications', [])),
-                # 'warnings': ' '.join(entry.get('warnings', [])),
-                # 'precautions': ' '.join(entry.get('precautions', [])),
-                # 'adverse_reactions': ' '.join(entry.get('adverse_reactions', [])),
             })
         return drugs
     except Exception:
         return []
 
+# ---------------------------
+# 4. Streamlit UI
+# ---------------------------
 
+# Maintain session state for input corrections
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
 
@@ -99,44 +132,37 @@ if 'corrected_match' not in st.session_state:
 def on_input_change():
     st.session_state.corrected_match = ''
 
-st.title("Medication Contraindication Checker (Information Obtained from OpenFDA API)")
-st.write("Enter an illness to see which medications adversely interact with it (FDA label contraindications).")
-st.markdown(
-    """
-    <small>
-      <em>
-        Disclaimer: This application is for educational and informational purposes only, and does not constitute medical advice, diagnosis, or treatment. Do not rely on this application for medical decision-making. Always consult a qualified healthcare provider with any questions you may have regarding a medical condition. If you are experiencing a medical emergency, call your local emergency number or seek care immediately.<br>
-        The creators and developers of this application accept no liability for any harm or loss resulting from your reliance on the information provided.
-      </em>
-    </small>
-    <br><br>
-    """,
-    unsafe_allow_html=True,
-)
+st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10 Search)")
 
-df, disease_names = load_data()
+st.write("Enter an illness to see medications with possible safety concerns related to it.")
+
+st.markdown("""
+<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small>
+<br><br>
+""", unsafe_allow_html=True)
 
 user_input = st.text_input(
-    "Enter a disease or illness:",
+    "Enter disease or illness:",
     value=st.session_state.user_text,
     key='user_text',
     on_change=on_input_change
 )
 
 if user_input:
-    match, score = fuzzy_find_best_match(user_input, disease_names)
+    match, score = find_best_match(user_input, disease_names)
     if not match:
-        st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
+        st.warning(f"No matches found for '{user_input}'. Please check spelling or try different terms.")
         st.session_state.corrected_match = ''
     else:
         icd_code_row = df[df['Description'] == match]
         icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
 
         if match.lower() != user_input.lower() or score < 100:
-            st.info(f"Did you mean **{match}** (ICD-10-CM code: {icd_code})? Results shown for closest match.")
+            st.info(f"Did you mean **{match}** (ICD-10 code: {icd_code})? Showing results for closest match.")
+
         st.session_state.corrected_match = match
 
-        with st.spinner(f"Searching FDA medication safety information for {match}..."):
+        with st.spinner(f"Searching FDA medication safety info for {match}..."):
             drugs = fetch_drug_contraindications(match)
 
         if drugs:
@@ -149,12 +175,14 @@ if user_input:
             deduped = filtered.drop_duplicates(subset=['_brand_lower', '_generic_lower'])
             deduped = deduped.drop(columns=['_brand_lower', '_generic_lower'])
             if not deduped.empty:
-                st.success(f"Drugs with safety concerns related to **{match}**, please consult a doctor before use:")
+                st.success(f"Drugs with safety concerns related to **{match}**, please consult a doctor:")
                 st.dataframe(deduped[["brand_name", "generic_name"]])
             else:
-                st.info(f"No drugs with brand or generic names found mentioning '{match}'.")
+                st.info(f"No drugs found mentioning '{match}' in warnings, contraindications, or adverse reactions.")
         else:
-            st.info(f"No FDA medication labels found mentioning '{match}' in contraindications, warnings, precautions, or adverse reactions.")
+            st.info(f"No FDA medication labels mentioning '{match}' found.")
+
+
 
 
 
