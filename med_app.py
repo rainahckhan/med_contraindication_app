@@ -14,9 +14,7 @@ def cached_load_app_assets():
 df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 
 # ---------
-# Helper function to simplify disease term for API query
-
-
+# Helper function to refine keyword extraction for API query
 def refine_keyword_extraction(matched_disease, user_input):
     """
     Extracts relevant disease keywords from matched_disease by aligning with user_input,
@@ -108,19 +106,20 @@ if user_input:
 
         st.session_state.corrected_match = match
 
-        # Simplify the matched disease term before querying API
-        keyword_for_api = simplify_disease_term(match, user_input)
+        # Use refined keyword extraction function here
+        keyword_for_api = refine_keyword_extraction(match, user_input)
         
         with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
             # Use the FDA fetch function from the backend with simplified keyword
             drugs = fetch_drug_contraindications(keyword_for_api)
 
         if drugs:
-            drug_df = pd.DataFrame(drugs) # Already deduplicated and formatted by backend function
+            drug_df = pd.DataFrame(drugs)  # Already deduplicated and formatted by backend function
             st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
             st.dataframe(drug_df[["brand_name", "generic_name"]])
         else:
             st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
+
 
 # import os
 # import streamlit as st
