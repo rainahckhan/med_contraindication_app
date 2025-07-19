@@ -10,45 +10,68 @@
 
 # In[2]:
 import pandas as pd
+import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
 
-# -------------------
-# 1. Parameters
-# -------------------
-infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10cm-Code Descriptions-2026\icd10cm-codes-2026.txt"
-outfile = r"icd10_preprocessed.parquet"   # Output file to use in your app
-
-# -------------------
-# 2. Load and parse official ICD-10-CM codes/descriptions
-# -------------------
+# 1. Load and preprocess ICD-10 codes (reuse your backend)
 def load_icd10cm_codes(filepath):
     data = []
     with open(filepath, 'r', encoding='utf-8') as f:
         for line in f:
-            parts = line.strip().split(maxsplit=1)  # Split into [code, description]
+            parts = line.strip().split(maxsplit=1)
             if len(parts) == 2:
                 code, desc = parts
-                # Insert decimal point after 3rd character if missing and code length > 3
+                # Insert decimal point after 3rd char if missing and length > 3
                 if len(code) > 3 and '.' not in code:
                     code = code[:3] + '.' + code[3:]
                 data.append((code, desc))
     df = pd.DataFrame(data, columns=['Code', 'Description'])
     return df
 
-# -------------------
-# 3. Run loading and export
-# -------------------
+# Load your data file path here:
+infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10cm-Code Descriptions-2026\icd10cm-codes-2026.txt"
+
 df_icd = load_icd10cm_codes(infile)
-
-# Optional: sort by code for neatness
-df_icd = df_icd.sort_values('Code').reset_index(drop=True)
-
 print(f"Loaded {len(df_icd):,} ICD-10-CM codes with descriptions.")
 
-# -------------------
-# 4. Save dataframe as parquet
-# -------------------
-df_icd.to_parquet(outfile)
-print(f"Exported preprocessed ICD-10-CM data to: {outfile}")
+# 2. Load BioBERT model and encode disease descriptions
+model = SentenceTransformer('sentence-transformers/biobert-base-cased-v1')
+
+# Encode and normalize embeddings (shape: [num_codes, 768])
+disease_names = df_icd['Description'].tolist()
+disease_embeddings = model.encode(disease_names, normalize_embeddings=True)
+disease_embeddings = disease_embeddings.astype(np.float32)  # FAISS requires float32
+
+# 3. Build FAISS index (exact inner-product = cosine similarity for normalized vectors)
+dimension = disease_embeddings.shape[1]
+index = faiss.IndexFlatIP(dimension)
+index.add(disease_embeddings)
+
+print(f"Built FAISS index with {index.ntotal} vectors.")
+
+# 4. Define semantic search function
+def semantic_search(query, top_k=10):
+    query_embedding = model.encode([query], normalize_embeddings=True).astype(np.float32)
+    distances, indices = index.search(query_embedding, top_k)
+    results = []
+    for score, idx in zip(distances[0], indices[0]):
+        results.append({
+            'ICD_Code': df_icd.iloc[idx]['Code'],
+            'Description': df_icd.iloc[idx]['Description'],
+            'Score': float(score),
+        })
+    return results
+
+# Example usage:
+if __name__ == "__main__":
+    query = "lupus"
+    matches = semantic_search(query)
+    print(f"Top {len(matches)} matches for '{query}':")
+    for match in matches:
+        print(f"{match['ICD_Code']} - {match['Description']} (score: {match['Score']:.4f})")
+
+
 
 
 
