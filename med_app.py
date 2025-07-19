@@ -35,19 +35,19 @@ def load_data():
 
 
 
-def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
+def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4, popularity_dict=None):
     if not user_input or not disease_names:
         return None, 0
 
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Exact match (case insensitive)
+    # 1. Exact match
     for d in candidate_names:
         if d.lower() == input_clean:
             return d, 100
 
-    # 2. Fuzzy match among names with length difference at most 1
+    # 2. Fuzzy match with threshold
     similar_length_names = [
         d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
     ]
@@ -55,42 +55,27 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
         input_clean,
         similar_length_names,
         scorer=fuzz.WRatio,
-        limit=3,
+        limit=5,
         score_cutoff=threshold
     )
     if fuzzy_matches:
         best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
         return best_match, best_score
 
-    # 3. Word-boundary substring match, exact whole word
-    pattern = re.compile(rf'\b{re.escape(input_clean)}\b')
-    substr_matches = [d for d in candidate_names if pattern.search(d.lower())]
+    # 3. Substring matches anywhere
+    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
     if substr_matches:
-        best_substr_match = min(substr_matches, key=len)
-        if len(best_substr_match) == len(input_clean):
-            return best_substr_match, 100
+        # If popularity_dict provided, sort by popularity descending
+        if popularity_dict:
+            substr_matches.sort(key=lambda x: popularity_dict.get(x.lower(), 0), reverse=True)
+        else:
+            # fallback: shorter names first as proxy for popularity
+            substr_matches.sort(key=len)
 
-    # 4. Relaxed substring matching with priority for names starting with input_clean
-    relaxed_substr_matches = [
-        d for d in candidate_names if input_clean in d.lower()
-    ]
+        return substr_matches[0], 85  # confidence score indicating fallback substring match
 
-    if relaxed_substr_matches:
-        # First prefer matches where disease name starts with input_clean
-        startswith_matches = [
-            d for d in relaxed_substr_matches if d.lower().startswith(input_clean)
-        ]
-        if startswith_matches:
-            best_startswith_match = min(startswith_matches, key=len)
-            return best_startswith_match, 90  # confidence score for startswith matches
-
-        # Otherwise, fallback to shortest disease containing input_clean anywhere
-        best_relaxed_match = min(relaxed_substr_matches, key=len)
-        return best_relaxed_match, 85  # lower confidence for other substring matches
-
-    # No match found
+    # No match at all
     return None, 0
-
 
 
 @st.cache_data(show_spinner=False)
