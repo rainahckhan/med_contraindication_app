@@ -17,7 +17,7 @@ df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 # Helper function to refine keyword extraction for API query
 
 
-def refine_keyword_extraction_v2(matched_disease, user_input):
+def refine_keyword_extraction(matched_disease, user_input):
     """
     Prioritizes the user input phrase for the API query.
     Only falls back to longer substrings or overlapping words if user input phrase not present.
