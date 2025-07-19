@@ -124,6 +124,7 @@ st.markdown(
         The creators and developers of this application accept no liability for any harm or loss resulting from your reliance on the information provided.
       </em>
     </small>
+    <br><br>
     """,
     unsafe_allow_html=True,
 )
