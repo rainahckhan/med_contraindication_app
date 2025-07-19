@@ -5,6 +5,7 @@ import spacy
 from fuzzywuzzy import fuzz
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 import requests
+import numpy as np
 
 # ---------------------------
 # 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
@@ -19,20 +20,62 @@ df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 # Load spaCy model once
 nlp = spacy.load("en_core_web_sm")
 
-# ---------
-# Helper function to refine keyword extraction for API query
 
-def refine_keyword_extraction(matched_disease, user_input):
+# ---------
+# Enhanced semantic-only refine_keyword_extraction
+
+def refine_keyword_extraction(matched_disease, user_input, sbert_model=None, similarity_threshold=0.7):
+    """
+    Refine keyword for OpenFDA query by dynamic semantic similarity between matched disease and user input substrings.
+    
+    Parameters:
+        matched_disease (str): ICD-10 matched disease string.
+        user_input (str): Original user input.
+        sbert_model: Sentence transformer model (must have encode method).
+        similarity_threshold (float): Minimum cosine similarity to accept a substring.
+    
+    Returns:
+        str: Best keyword or phrase to query OpenFDA.
+    """
     def normalize(text):
         return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
     matched_norm = normalize(matched_disease)
     user_norm = normalize(user_input)
 
-    if user_norm and user_norm in matched_norm:
-        return user_norm
+    if sbert_model is None:
+        # fallback to simpler existing logic
+        if user_norm and user_norm in matched_norm:
+            return user_norm
+        return matched_norm
+
+    matched_vec = sbert_model.encode([matched_disease])[0]
 
     user_words = user_norm.split()
+    max_phrase_len = min(5, len(user_words))  # limit phrase length
+    candidates = set()
+
+    # Generate all candidate substrings up to max length
+    for length in range(max_phrase_len, 0, -1):
+        for start in range(len(user_words) - length + 1):
+            phrase = " ".join(user_words[start:start+length])
+            candidates.add(phrase)
+
+    candidates = list(candidates)
+    candidate_vecs = sbert_model.encode(candidates)
+
+    def cosine_sim(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    sims = [cosine_sim(matched_vec, cvec) for cvec in candidate_vecs]
+
+    best_idx = np.argmax(sims)
+    best_score = sims[best_idx]
+
+    if best_score >= similarity_threshold:
+        return candidates[best_idx]
+
+    # Fallback to longest substring of user input inside matched disease
     longest_span = ""
     for start in range(len(user_words)):
         for end in range(len(user_words), start, -1):
@@ -40,21 +83,12 @@ def refine_keyword_extraction(matched_disease, user_input):
             if span and span in matched_norm:
                 if len(span) > len(longest_span):
                     longest_span = span
+                    
     if longest_span:
         return longest_span
 
-    matched_words = matched_norm.split()
-    common_words = [word for word in user_words if word in matched_words]
-    if common_words:
-        return " ".join(common_words)
+    return matched_norm
 
-    if user_norm:
-        return user_norm
-
-    if matched_norm:
-        return max(matched_norm.split(), key=len)
-
-    return matched_disease.lower()
 
 # ---------
 # Sentences extraction with spaCy + fuzzy matching
@@ -107,7 +141,6 @@ def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
             texts = label.get(field)
             if texts:
                 combined_text = " ".join(texts)
-                # Use fuzzy sentence extraction function here
                 relevant_snippets = extract_relevant_sentences(combined_text, disease_keyword)
                 snippet = " ".join(relevant_snippets)
                 if len(snippet) > max_chars:
@@ -147,7 +180,7 @@ user_input = st.text_input(
 
 if user_input:
     match, score, method = find_best_match_combined(user_input, sbert_model, faiss_index, disease_names_list)
-    
+
     if not match:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different terms.")
         st.session_state.corrected_match = ''
@@ -163,8 +196,14 @@ if user_input:
 
         st.session_state.corrected_match = match
 
-        keyword_for_api = refine_keyword_extraction(match, user_input)
-        
+        # Use enhanced semantic refine for keyword extraction
+        keyword_for_api = refine_keyword_extraction(
+            match,
+            user_input,
+            sbert_model=sbert_model,
+            similarity_threshold=0.7
+        )
+
         with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
             drugs = fetch_drug_contraindications(keyword_for_api)
 
@@ -184,6 +223,7 @@ if user_input:
                         st.write(text_snippet)
                 else:
                     st.write("ℹ️ No detailed label safety information found mentioning this illness.")
+
 
 
 
