@@ -1,0 +1,2 @@
+disease_embeddings.npy filter=lfs diff=lfs merge=lfs -text
+faiss_index.bin filter=lfs diff=lfs merge=lfs -text
