@@ -80,6 +80,8 @@ for batch_start in tqdm(range(0, len(descriptions), batch_size), desc="spaCy NLP
 
 df['GeneralDisease'] = results
 
+df['GeneralDisease'] = df['GeneralDisease'].str.replace("disord", "disorder", case=False, regex=False)
+
 # -------------------
 # 5. Save Preprocessed Table (only essential columns, as Parquet)
 # -------------------
