@@ -192,9 +192,18 @@ st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10)")
 
 st.write("Enter an illness to see medications with possible safety concerns related to it.")
 
-st.markdown(
-    "<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small><br><br>",
-    unsafe_allow_html=True)
+st.markdown("""
+<small>
+<em>
+<b>Disclaimer:</b> This application is intended for educational and informational purposes only. It is not a substitute for professional medical advice, diagnosis, or treatment. \
+Always seek the advice of a qualified healthcare provider with any questions regarding a medical condition or medication. \
+Reliance on any information provided by this app is solely at your own risk. \
+The developers and providers of this app disclaim all liability for any damages or adverse consequences resulting from use of the information herein.
+</em>
+</small>
+<br><br>
+""", unsafe_allow_html=True)
+
 
 user_input = st.text_input(
     "Enter disease or illness:",
