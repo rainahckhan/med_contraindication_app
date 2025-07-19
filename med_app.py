@@ -195,6 +195,9 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.write("Enter an illness to see medications with possible safety concerns related to it.")
 
+st.markdown("<br>", unsafe_allow_html=True)
+
+
 user_input = st.text_input(
     "Enter disease or illness:",
     value=st.session_state.user_text,
