@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 import re
+import spacy
+from fuzzywuzzy import fuzz
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 import requests
-
 
 # ---------------------------
 # 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
@@ -15,7 +16,11 @@ def cached_load_app_assets():
 df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 
 # ---------
-# Helper function to extract simplified search term
+# Load spaCy model once
+nlp = spacy.load("en_core_web_sm")
+
+# ---------
+# Helper function to refine keyword extraction for API query
 
 def refine_keyword_extraction(matched_disease, user_input):
     def normalize(text):
@@ -52,15 +57,30 @@ def refine_keyword_extraction(matched_disease, user_input):
     return matched_disease.lower()
 
 # ---------
-# New helper: fetch detailed label info from OpenFDA API by drug brand name
+# Sentences extraction with spaCy + fuzzy matching
+
+def extract_relevant_sentences(text, disease_term, threshold=80, max_sentences=5):
+    doc = nlp(text)
+    matches = []
+    disease_term_lower = disease_term.lower()
+    for sent in doc.sents:
+        sent_text = sent.text.lower()
+        if disease_term_lower in sent_text:
+            matches.append(sent.text)
+        else:
+            score = fuzz.partial_ratio(disease_term_lower, sent_text)
+            if score >= threshold:
+                matches.append(sent.text)
+        if len(matches) >= max_sentences:
+            break
+    # fallback to first 1-2 sentences if no matches
+    return matches if matches else [str(s) for s in doc.sents][:2]
+
+# ---------
+# Fetch detailed label info from OpenFDA and filter relevant sentences
+
 def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
-    """
-    Queries OpenFDA drug label API for the given drug brand name,
-    extracts relevant safety sections mentioning the disease_keyword.
-    Returns a dict of section titles to text snippets.
-    """
     base_url = "https://api.fda.gov/drug/label.json"
-    # Search label for the brand name and disease keyword in safety related fields
     search_fields = [
         "contraindications",
         "warnings",
@@ -71,7 +91,7 @@ def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
                    " OR ".join([f'{field}:"{disease_keyword}"' for field in search_fields]) + ")"
     params = {
         "search": search_query,
-        "limit": 1  # We just want first relevant label
+        "limit": 1
     }
     try:
         resp = requests.get(base_url, params=params, timeout=10)
@@ -86,18 +106,19 @@ def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
         for field in search_fields:
             texts = label.get(field)
             if texts:
-                # Concatenate multiple paragraphs, highlight disease term
                 combined_text = " ".join(texts)
-                if disease_keyword.lower() in combined_text.lower():
-                    snippet = combined_text[:max_chars] + ("..." if len(combined_text) > max_chars else "")
-                    parsed_sections[field.capitalize().replace("_", " ")] = snippet
+                # Use fuzzy sentence extraction function here
+                relevant_snippets = extract_relevant_sentences(combined_text, disease_keyword)
+                snippet = " ".join(relevant_snippets)
+                if len(snippet) > max_chars:
+                    snippet = snippet[:max_chars] + "..."
+                parsed_sections[field.capitalize().replace("_", " ")] = snippet
+
         return parsed_sections
 
     except Exception as e:
-        # In your app you may want to log the error instead of printing
         print(f"Error fetching label details for {brand_name}: {e}")
         return {}
-
 
 # ---------------------------
 # 2. Streamlit UI
@@ -163,6 +184,7 @@ if user_input:
                         st.write(text_snippet)
                 else:
                     st.write("ℹ️ No detailed label safety information found mentioning this illness.")
+
 
 
 
