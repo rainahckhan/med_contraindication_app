@@ -2,37 +2,31 @@ import streamlit as st
 import pandas as pd
 import re
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
+import requests
+
 
 # ---------------------------
 # 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
 # ---------------------------
 @st.cache_resource(show_spinner=True)
 def cached_load_app_assets():
-    """Wrapper for backend's load_app_assets to utilize Streamlit's cache."""
     return load_app_assets()
 
 df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 
 # ---------
-# Helper function to refine keyword extraction for API query
-
+# Helper function to extract simplified search term
 
 def refine_keyword_extraction(matched_disease, user_input):
-    """
-    Prioritizes the user input phrase for the API query.
-    Only falls back to longer substrings or overlapping words if user input phrase not present.
-    """
     def normalize(text):
         return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
     matched_norm = normalize(matched_disease)
     user_norm = normalize(user_input)
 
-    # 1. If entire user input phrase appears in matched disease, prefer that
     if user_norm and user_norm in matched_norm:
         return user_norm
 
-    # 2. Else, try to find longest contiguous substring from user input inside matched disease
     user_words = user_norm.split()
     longest_span = ""
     for start in range(len(user_words)):
@@ -44,22 +38,65 @@ def refine_keyword_extraction(matched_disease, user_input):
     if longest_span:
         return longest_span
 
-    # 3. Else, find common words between user input and matched disease preserving order
     matched_words = matched_norm.split()
     common_words = [word for word in user_words if word in matched_words]
     if common_words:
         return " ".join(common_words)
 
-    # 4. Fallback: return user input itself if present
     if user_norm:
         return user_norm
 
-    # 5. As last fallback, return longest word in matched disease
     if matched_norm:
         return max(matched_norm.split(), key=len)
 
-    # Default fallback: original matched disease
     return matched_disease.lower()
+
+# ---------
+# New helper: fetch detailed label info from OpenFDA API by drug brand name
+def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
+    """
+    Queries OpenFDA drug label API for the given drug brand name,
+    extracts relevant safety sections mentioning the disease_keyword.
+    Returns a dict of section titles to text snippets.
+    """
+    base_url = "https://api.fda.gov/drug/label.json"
+    # Search label for the brand name and disease keyword in safety related fields
+    search_fields = [
+        "contraindications",
+        "warnings",
+        "precautions",
+        "adverse_reactions"
+    ]
+    search_query = f'openfda.brand_name:"{brand_name}" AND (' + \
+                   " OR ".join([f'{field}:"{disease_keyword}"' for field in search_fields]) + ")"
+    params = {
+        "search": search_query,
+        "limit": 1  # We just want first relevant label
+    }
+    try:
+        resp = requests.get(base_url, params=params, timeout=10)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if not results:
+            return {}
+
+        label = results[0]
+        parsed_sections = {}
+
+        for field in search_fields:
+            texts = label.get(field)
+            if texts:
+                # Concatenate multiple paragraphs, highlight disease term
+                combined_text = " ".join(texts)
+                if disease_keyword.lower() in combined_text.lower():
+                    snippet = combined_text[:max_chars] + ("..." if len(combined_text) > max_chars else "")
+                    parsed_sections[field.capitalize().replace("_", " ")] = snippet
+        return parsed_sections
+
+    except Exception as e:
+        # In your app you may want to log the error instead of printing
+        print(f"Error fetching label details for {brand_name}: {e}")
+        return {}
 
 
 # ---------------------------
@@ -88,14 +125,12 @@ user_input = st.text_input(
     on_change=on_input_change)
 
 if user_input:
-    # Use the combined matching function from the backend
     match, score, method = find_best_match_combined(user_input, sbert_model, faiss_index, disease_names_list)
     
     if not match:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different terms.")
         st.session_state.corrected_match = ''
     else:
-        # Find ICD code from the loaded DataFrame
         icd_code_row = df_icd[df_icd['Description'] == match]
         icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
 
@@ -107,19 +142,28 @@ if user_input:
 
         st.session_state.corrected_match = match
 
-        # Use refined keyword extraction function here
         keyword_for_api = refine_keyword_extraction(match, user_input)
         
         with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
-            # Use the FDA fetch function from the backend with simplified keyword
             drugs = fetch_drug_contraindications(keyword_for_api)
 
-        if drugs:
-            drug_df = pd.DataFrame(drugs)  # Already deduplicated and formatted by backend function
-            st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
-            st.dataframe(drug_df[["brand_name", "generic_name"]])
-        else:
+        if not drugs:
             st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
+        else:
+            st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
+            for drug in drugs:
+                brand_name = drug.get("brand_name", "Unknown")
+                generic_name = drug.get("generic_name", "Unknown")
+                st.markdown(f"### {brand_name} ({generic_name})")
+
+                label_info = fetch_drug_label_details(brand_name, keyword_for_api)
+                if label_info:
+                    for section_title, text_snippet in label_info.items():
+                        st.markdown(f"**{section_title}:**")
+                        st.write(text_snippet)
+                else:
+                    st.write("ℹ️ No detailed label safety information found mentioning this illness.")
+
 
 
 # import os
