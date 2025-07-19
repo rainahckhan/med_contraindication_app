@@ -6,6 +6,7 @@ from fuzzywuzzy import fuzz
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 import requests
 import numpy as np
+import html
 
 # ---------------------------
 # 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
@@ -110,6 +111,22 @@ def extract_relevant_sentences(text, disease_term, threshold=80, max_sentences=5
     # fallback to first 1-2 sentences if no matches
     return matches if matches else [str(s) for s in doc.sents][:2]
 
+
+# ---------
+# Highlight matched keywords in text for display
+
+def highlight_keyword(text, keyword):
+    # HTML escape to avoid injection issues
+    escaped_text = html.escape(text)
+    escaped_keyword = html.escape(keyword)
+    
+    # Simple case-insensitive highlight by wrapping keyword in <mark> tags
+    import re
+    pattern = re.compile(re.escape(escaped_keyword), re.IGNORECASE)
+    highlighted = pattern.sub(r'<mark>\g<0></mark>', escaped_text)
+    return highlighted
+
+
 # ---------
 # Fetch detailed label info from OpenFDA and filter relevant sentences
 
@@ -141,17 +158,24 @@ def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
             texts = label.get(field)
             if texts:
                 combined_text = " ".join(texts)
-                relevant_snippets = extract_relevant_sentences(combined_text, disease_keyword)
-                snippet = " ".join(relevant_snippets)
+                relevant_sentences = extract_relevant_sentences(combined_text, disease_keyword)
+                
+                # Join sentences for display, limit length
+                snippet = " ".join(relevant_sentences)
                 if len(snippet) > max_chars:
                     snippet = snippet[:max_chars] + "..."
-                parsed_sections[field.capitalize().replace("_", " ")] = snippet
+
+                parsed_sections[field.capitalize().replace("_", " ")] = {
+                    "snippet": snippet,
+                    "sentences": relevant_sentences
+                }
 
         return parsed_sections
 
     except Exception as e:
         print(f"Error fetching label details for {brand_name}: {e}")
         return {}
+
 
 # ---------------------------
 # 2. Streamlit UI
@@ -218,11 +242,249 @@ if user_input:
 
                 label_info = fetch_drug_label_details(brand_name, keyword_for_api)
                 if label_info:
-                    for section_title, text_snippet in label_info.items():
-                        st.markdown(f"**{section_title}:**")
-                        st.write(text_snippet)
+                    for section_title, info in label_info.items():
+                        if isinstance(info, dict):
+                            st.markdown(f"**{section_title}:**")
+                            for sentence in info.get("sentences", []):
+                                # Highlight disease keyword inside sentence
+                                highlighted_sentence = highlight_keyword(sentence, keyword_for_api)
+                                st.markdown(highlighted_sentence, unsafe_allow_html=True)
+                        else:
+                            # fallback if text only
+                            st.markdown(f"**{section_title}:**")
+                            st.write(info)
                 else:
                     st.write("ℹ️ No detailed label safety information found mentioning this illness.")
+
+
+
+
+# ---------------------------------------------------------------------------------------------------------
+# import streamlit as st
+# import pandas as pd
+# import re
+# import spacy
+# from fuzzywuzzy import fuzz
+# from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
+# import requests
+# import numpy as np
+
+# # ---------------------------
+# # 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
+# # ---------------------------
+# @st.cache_resource(show_spinner=True)
+# def cached_load_app_assets():
+#     return load_app_assets()
+
+# df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
+
+# # ---------
+# # Load spaCy model once
+# nlp = spacy.load("en_core_web_sm")
+
+
+# # ---------
+# # Enhanced semantic-only refine_keyword_extraction
+
+# def refine_keyword_extraction(matched_disease, user_input, sbert_model=None, similarity_threshold=0.7):
+#     """
+#     Refine keyword for OpenFDA query by dynamic semantic similarity between matched disease and user input substrings.
+    
+#     Parameters:
+#         matched_disease (str): ICD-10 matched disease string.
+#         user_input (str): Original user input.
+#         sbert_model: Sentence transformer model (must have encode method).
+#         similarity_threshold (float): Minimum cosine similarity to accept a substring.
+    
+#     Returns:
+#         str: Best keyword or phrase to query OpenFDA.
+#     """
+#     def normalize(text):
+#         return re.sub(r'[^\w\s]', '', text.lower()).strip()
+
+#     matched_norm = normalize(matched_disease)
+#     user_norm = normalize(user_input)
+
+#     if sbert_model is None:
+#         # fallback to simpler existing logic
+#         if user_norm and user_norm in matched_norm:
+#             return user_norm
+#         return matched_norm
+
+#     matched_vec = sbert_model.encode([matched_disease])[0]
+
+#     user_words = user_norm.split()
+#     max_phrase_len = min(5, len(user_words))  # limit phrase length
+#     candidates = set()
+
+#     # Generate all candidate substrings up to max length
+#     for length in range(max_phrase_len, 0, -1):
+#         for start in range(len(user_words) - length + 1):
+#             phrase = " ".join(user_words[start:start+length])
+#             candidates.add(phrase)
+
+#     candidates = list(candidates)
+#     candidate_vecs = sbert_model.encode(candidates)
+
+#     def cosine_sim(a, b):
+#         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+#     sims = [cosine_sim(matched_vec, cvec) for cvec in candidate_vecs]
+
+#     best_idx = np.argmax(sims)
+#     best_score = sims[best_idx]
+
+#     if best_score >= similarity_threshold:
+#         return candidates[best_idx]
+
+#     # Fallback to longest substring of user input inside matched disease
+#     longest_span = ""
+#     for start in range(len(user_words)):
+#         for end in range(len(user_words), start, -1):
+#             span = " ".join(user_words[start:end])
+#             if span and span in matched_norm:
+#                 if len(span) > len(longest_span):
+#                     longest_span = span
+                    
+#     if longest_span:
+#         return longest_span
+
+#     return matched_norm
+
+
+# # ---------
+# # Sentences extraction with spaCy + fuzzy matching
+
+# def extract_relevant_sentences(text, disease_term, threshold=80, max_sentences=5):
+#     doc = nlp(text)
+#     matches = []
+#     disease_term_lower = disease_term.lower()
+#     for sent in doc.sents:
+#         sent_text = sent.text.lower()
+#         if disease_term_lower in sent_text:
+#             matches.append(sent.text)
+#         else:
+#             score = fuzz.partial_ratio(disease_term_lower, sent_text)
+#             if score >= threshold:
+#                 matches.append(sent.text)
+#         if len(matches) >= max_sentences:
+#             break
+#     # fallback to first 1-2 sentences if no matches
+#     return matches if matches else [str(s) for s in doc.sents][:2]
+
+# # ---------
+# # Fetch detailed label info from OpenFDA and filter relevant sentences
+
+# def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
+#     base_url = "https://api.fda.gov/drug/label.json"
+#     search_fields = [
+#         "contraindications",
+#         "warnings",
+#         "precautions",
+#         "adverse_reactions"
+#     ]
+#     search_query = f'openfda.brand_name:"{brand_name}" AND (' + \
+#                    " OR ".join([f'{field}:"{disease_keyword}"' for field in search_fields]) + ")"
+#     params = {
+#         "search": search_query,
+#         "limit": 1
+#     }
+#     try:
+#         resp = requests.get(base_url, params=params, timeout=10)
+#         resp.raise_for_status()
+#         results = resp.json().get("results", [])
+#         if not results:
+#             return {}
+
+#         label = results[0]
+#         parsed_sections = {}
+
+#         for field in search_fields:
+#             texts = label.get(field)
+#             if texts:
+#                 combined_text = " ".join(texts)
+#                 relevant_snippets = extract_relevant_sentences(combined_text, disease_keyword)
+#                 snippet = " ".join(relevant_snippets)
+#                 if len(snippet) > max_chars:
+#                     snippet = snippet[:max_chars] + "..."
+#                 parsed_sections[field.capitalize().replace("_", " ")] = snippet
+
+#         return parsed_sections
+
+#     except Exception as e:
+#         print(f"Error fetching label details for {brand_name}: {e}")
+#         return {}
+
+# # ---------------------------
+# # 2. Streamlit UI
+# # ---------------------------
+# if 'user_text' not in st.session_state:
+#     st.session_state.user_text = ''
+# if 'corrected_match' not in st.session_state:
+#     st.session_state.corrected_match = ''
+
+# def on_input_change():
+#     st.session_state.corrected_match = ''
+
+# st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10)")
+
+# st.write("Enter an illness to see medications with possible safety concerns related to it.")
+
+# st.markdown(
+#     "<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small><br><br>",
+#     unsafe_allow_html=True)
+
+# user_input = st.text_input(
+#     "Enter disease or illness:",
+#     value=st.session_state.user_text,
+#     key='user_text',
+#     on_change=on_input_change)
+
+# if user_input:
+#     match, score, method = find_best_match_combined(user_input, sbert_model, faiss_index, disease_names_list)
+
+#     if not match:
+#         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different terms.")
+#         st.session_state.corrected_match = ''
+#     else:
+#         icd_code_row = df_icd[df_icd['Description'] == match]
+#         icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
+
+#         if method == 'semantic':
+#             st.success(f"Best semantic match: **{match}** (ICD-10: {icd_code}) with similarity {score:.1f}%")
+#         else:
+#             st.info(f"Using fallback fuzzy match: **{match}** (ICD-10: {icd_code}), similarity {score:.1f}%. "
+#                     "Semantic match was below threshold or unavailable.")
+
+#         st.session_state.corrected_match = match
+
+#         # Use enhanced semantic refine for keyword extraction
+#         keyword_for_api = refine_keyword_extraction(
+#             match,
+#             user_input,
+#             sbert_model=sbert_model,
+#             similarity_threshold=0.7
+#         )
+
+#         with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
+#             drugs = fetch_drug_contraindications(keyword_for_api)
+
+#         if not drugs:
+#             st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
+#         else:
+#             st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
+#             for drug in drugs:
+#                 brand_name = drug.get("brand_name", "Unknown")
+#                 generic_name = drug.get("generic_name", "Unknown")
+#                 st.markdown(f"### {brand_name} ({generic_name})")
+
+#                 label_info = fetch_drug_label_details(brand_name, keyword_for_api)
+#                 if label_info:
+#                     for section_title, text_snippet in label_info.items():
+#                         st.markdown(f"**{section_title}:**")
+#                         st.write(text_snippet)
+#                 else:
+#                     st.write("ℹ️ No detailed label safety information found mentioning this illness.")
 
 
 
