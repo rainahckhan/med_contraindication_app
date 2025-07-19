@@ -191,7 +191,7 @@ The developers and providers of this app disclaim all liability for any damages 
 <br><br>
 """, unsafe_allow_html=True)
 
-st.write("")
+st.markdown("<br>", unsafe_allow_html=True)
 
 st.write("Enter an illness to see medications with possible safety concerns related to it.")
 
