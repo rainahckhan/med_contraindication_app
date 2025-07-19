@@ -36,7 +36,8 @@ df_icd = load_icd10cm_codes(infile)
 print(f"Loaded {len(df_icd):,} ICD-10-CM codes with descriptions.")
 
 # 2. Load BioBERT model and encode disease descriptions
-model = SentenceTransformer('sentence-transformers/biobert-base-cased-v1')
+model = SentenceTransformer('pritamdeka/S-BioBert-snli-multinli-stsb')
+
 
 # Encode and normalize embeddings (shape: [num_codes, 768])
 disease_names = df_icd['Description'].tolist()
@@ -70,7 +71,6 @@ if __name__ == "__main__":
     print(f"Top {len(matches)} matches for '{query}':")
     for match in matches:
         print(f"{match['ICD_Code']} - {match['Description']} (score: {match['Score']:.4f})")
-
 
 
 
