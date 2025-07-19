@@ -42,7 +42,7 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Exact match
+    # 1. Exact match (case insensitive)
     for d in candidate_names:
         if d.lower() == input_clean:
             return d, 100
@@ -62,16 +62,28 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
         best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
         return best_match, best_score
 
-    # 3. Word-boundary substring match, but only if there's no shorter match
+    # 3. Word-boundary substring match (only exact whole words)
     pattern = re.compile(rf'\b{re.escape(input_clean)}\b')
     substr_matches = [d for d in candidate_names if pattern.search(d.lower())]
     if substr_matches:
-        # Only return if no word is shorter than the input (avoid "anxiety dementia" for "anxiety")
+        # Prefer shortest disease name so "anxiety" < "anxiety disorder"
         best_substr_match = min(substr_matches, key=len)
         if len(best_substr_match) == len(input_clean):
             return best_substr_match, 100
 
+    # 4. Substring anywhere in disease name (more relaxed)
+    relaxed_substr_matches = [
+        d for d in candidate_names if input_clean in d.lower()
+    ]
+    if relaxed_substr_matches:
+        # Pick the shortest disease name containing the input substring; 
+        # or you could sort by frequency/popularity if available.
+        best_relaxed_match = min(relaxed_substr_matches, key=len)
+        return best_relaxed_match, 90  # Lower confidence score
+
+    # If nothing found return None
     return None, 0
+
 
 
 @st.cache_data(show_spinner=False)
@@ -130,13 +142,26 @@ user_input = st.text_input(
 # Do NOT assign st.session_state.user_text = user_input here!
 # Streamlit already manages this for you based on the 'key'
 
+# if user_input:
+#     match, score = fuzzy_find_best_match(user_input, disease_names)
+#     if not match:
+#         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
+#         st.session_state.corrected_match = ''
+#     else:
+#         if match.lower() != user_input.lower():
+#             st.info(f"Did you mean **{match}**? Results shown for closest match.")
+#         st.session_state.corrected_match = match
+
+#         with st.spinner(f"Searching FDA contraindications for {match}..."):
+#             drugs = fetch_drug_contraindications(match)
 if user_input:
     match, score = fuzzy_find_best_match(user_input, disease_names)
     if not match:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
         st.session_state.corrected_match = ''
     else:
-        if match.lower() != user_input.lower():
+        # Notify only if suggested match differs case-insensitive or score < 100
+        if match.lower() != user_input.lower() or score < 100:
             st.info(f"Did you mean **{match}**? Results shown for closest match.")
         st.session_state.corrected_match = match
 
