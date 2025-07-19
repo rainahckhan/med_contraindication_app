@@ -9,252 +9,196 @@
 
 
 # In[2]:
-import os
+import streamlit as st
 import pandas as pd
-import numpy as np
-import faiss
-from sentence_transformers import SentenceTransformer
+import re
+import spacy
+from fuzzywuzzy import fuzz
+from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 import requests
-from rapidfuzz import process, fuzz
+import os
 
-# --- Configuration and File Paths ---
-# You can adjust these paths if your raw data or precomputed files are elsewhere
-# Note: For deployment, ensure these paths are relative to your app's root
-RAW_ICD10_TXT_PATH = r"C:\Users\slk20\Documents\Drug Interaction App\icd10cm-Code Descriptions-2026\icd10cm-codes-2026.txt"
-PREPROCESSED_PARQUET_PATH = "icd10_preprocessed.parquet"
-EMBEDDINGS_NPY_PATH = "disease_embeddings.npy"
-FAISS_INDEX_BIN_PATH = "faiss_index.bin"
-
-# --- 1. Offline Preprocessing and Asset Generation ---
-def _load_raw_icd10cm_codes(filepath):
-    """Loads and preprocesses raw ICD-10-CM codes from a text file."""
-    data = []
-    with open(filepath, 'r', encoding='utf-8') as f:
-        for line in f:
-            parts = line.strip().split(maxsplit=1)
-            if len(parts) == 2:
-                code, desc = parts
-                # Insert decimal point after 3rd char if missing and length > 3
-                if len(code) > 3 and '.' not in code:
-                    code = code[:3] + '.' + code[3:]
-                data.append((code, desc))
-    df = pd.DataFrame(data, columns=['Code', 'Description'])
-    return df
-
-def generate_precomputed_assets(output_dir="."):
-    """
-    Generates and saves the preprocessed ICD-10 data, embeddings, and FAISS index.
-    This function should be run ONCE locally before deploying the Streamlit app.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 1. Load and Preprocess ICD-10 raw text
-    print("Step 1/4: Loading and preprocessing raw ICD-10 text data...")
-    df_icd = _load_raw_icd10cm_codes(RAW_ICD10_TXT_PATH)
-    print(f"Loaded {len(df_icd):,} ICD-10 codes.")
-
-    # Save preprocessed DataFrame to parquet
-    parquet_full_path = os.path.join(output_dir, PREPROCESSED_PARQUET_PATH)
-    df_icd.to_parquet(parquet_full_path)
-    print(f"Saved preprocessed ICD-10 data to {parquet_full_path}")
-
-    # 2. Load BioBERT model and encode disease descriptions
-    print("Step 2/4: Loading BioBERT embedding model and encoding descriptions...")
-    model = SentenceTransformer('pritamdeka/S-BioBert-snli-multinli-stsb')
-    disease_names = df_icd['Description'].tolist()
-    disease_embeddings = model.encode(disease_names, normalize_embeddings=True)
-    disease_embeddings = disease_embeddings.astype(np.float32)  # FAISS requires float32
-
-    # 3. Build FAISS index
-    print("Step 3/4: Building FAISS index...")
-    dimension = disease_embeddings.shape[1]
-    faiss_index = faiss.IndexFlatIP(dimension) # Using faiss_index to avoid conflict with `index` in outer scope
-    faiss_index.add(disease_embeddings)
-    print(f"FAISS index built with {faiss_index.ntotal} vectors.")
-
-    # 4. Save embeddings and FAISS index
-    print("Step 4/4: Saving embeddings and FAISS index...")
-    embeddings_full_path = os.path.join(output_dir, EMBEDDINGS_NPY_PATH)
-    faiss_index_full_path = os.path.join(output_dir, FAISS_INDEX_BIN_PATH)
-
-    np.save(embeddings_full_path, disease_embeddings)
-    faiss.write_index(faiss_index, faiss_index_full_path)
-    print(f"Saved embeddings to {embeddings_full_path}")
-    print(f"Saved FAISS index to {faiss_index_full_path}")
-    print("Preprocessing complete. Assets ready for app deployment.")
+# ---------
+# Load spaCy model once
+nlp = spacy.load("en_core_web_sm")
 
 
-# --- 2. In-App Asset Loading (for Streamlit app startup) ---
-# This part is for the Streamlit app to load the precomputed assets quickly
-_global_data = {
-    "df_icd": None,
-    "disease_names": None,
-    "model": None,
-    "faiss_index": None
-}
+# ---------
+# Helper function to refine keyword extraction for API query
 
-def load_app_assets():
-    """
-    Loads precomputed assets (ICD data, embeddings, FAISS index) and the SBERT model
-    for use in the Streamlit app. This function should be called once by the app.
-    """
-    if _global_data["df_icd"] is not None: # Check if already loaded
-        return _global_data["df_icd"], _global_data["disease_names"], _global_data["model"], _global_data["faiss_index"]
+def refine_keyword_extraction(matched_disease, user_input):
+    def normalize(text):
+        return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
-    curr_dir = os.path.dirname(os.path.abspath(__file__)) # Get current script's directory
+    matched_norm = normalize(matched_disease)
+    user_norm = normalize(user_input)
 
-    # Load preprocessed ICD-10 data
-    parquet_full_path = os.path.join(curr_dir, PREPROCESSED_PARQUET_PATH)
-    df = pd.read_parquet(parquet_full_path)
-    disease_names_list = df['Description'].dropna().tolist()
+    if user_norm and user_norm in matched_norm:
+        return user_norm
 
-    # Load BioBERT model (for encoding new queries)
-    model = SentenceTransformer('pritamdeka/S-BioBert-snli-multinli-stsb')
+    user_words = user_norm.split()
+    longest_span = ""
+    for start in range(len(user_words)):
+        for end in range(len(user_words), start, -1):
+            span = " ".join(user_words[start:end])
+            if span and span in matched_norm:
+                if len(span) > len(longest_span):
+                    longest_span = span
+    if longest_span:
+        return longest_span
 
-    # Load precomputed FAISS index
-    faiss_index_full_path = os.path.join(curr_dir, FAISS_INDEX_BIN_PATH)
-    faiss_index = faiss.read_index(faiss_index_full_path)
+    matched_words = matched_norm.split()
+    common_words = [word for word in user_words if word in matched_words]
+    if common_words:
+        return " ".join(common_words)
 
-    _global_data["df_icd"] = df
-    _global_data["disease_names"] = disease_names_list
-    _global_data["model"] = model
-    _global_data["faiss_index"] = faiss_index
+    if user_norm:
+        return user_norm
 
-    return df, disease_names_list, model, faiss_index
+    if matched_norm:
+        return max(matched_norm.split(), key=len)
 
-
-# --- 3. Semantic Search and Fuzzy Matching ---
-def semantic_search(query, model_obj, faiss_index_obj, disease_names_list, top_k=5, score_threshold=0.65):
-    """Performs semantic search using BioBERT and FAISS."""
-    query_emb = model_obj.encode([query], normalize_embeddings=True).astype(np.float32)
-    distances, indices = faiss_index_obj.search(query_emb, top_k)
-    results = []
-    for dist, idx in zip(distances[0], indices[0]):
-        if dist >= score_threshold:
-            results.append({'disease': disease_names_list[idx], 'score': float(dist)})
-    return results
-
-def fuzzy_find_best_match(user_input, disease_names_list, threshold=80, min_length=4):
-    """Performs fuzzy matching using rapidfuzz."""
-    if not user_input or not disease_names_list:
-        return None, 0
-    input_clean = user_input.lower().strip()
-    candidate_names = [d for d in disease_names_list if len(d) >= min_length]
-
-    # 1. Exact match
-    for d in candidate_names:
-        if d.lower() == input_clean:
-            return d, 100
-
-    # 2. Fuzzy match
-    close_names = [d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1]
-    fuzzy_matches = process.extract(input_clean, close_names, scorer=fuzz.WRatio, limit=5, score_cutoff=threshold)
-    if fuzzy_matches:
-        best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
-        return best_match, best_score
-
-    # 3. Substring match
-    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
-    if substr_matches:
-        substr_matches.sort(key=len)
-        return substr_matches[0], 85
-    return None, 0
-
-def find_best_match_combined(user_input, model_obj, faiss_index_obj, disease_names_list):
-    """Combines semantic and fuzzy matching for the best match."""
-    sem_results = semantic_search(user_input, model_obj, faiss_index_obj, disease_names_list)
-    if sem_results:
-        best_sem = sem_results[0]
-        # Use a semantic score threshold to determine if semantic match is good enough
-        if best_sem['score'] >= 0.65: # This threshold can be adjusted
-            return best_sem['disease'], best_sem['score'] * 100, 'semantic'
-
-    fuzzy_match, fuzzy_score = fuzzy_find_best_match(user_input, disease_names_list)
-    if fuzzy_match:
-        # Use a fuzzy score threshold, e.g., only if fuzzy score is reasonably high
-        if fuzzy_score >= 75: # This threshold can be adjusted
-            return fuzzy_match, fuzzy_score, 'fuzzy'
-    return None, 0, None
+    return matched_disease.lower()
 
 
-# --- 4. FDA Drug Contraindications Lookup ---
-def fetch_drug_contraindications(disease, max_results=50):
-    """Fetches drug contraindications from the OpenFDA API."""
-    url = 'https://api.fda.gov/drug/label.json'
-    # Broaden search to multiple fields to increase chances of finding info
-    search_query = (
-        f'contraindications:"{disease}"'
-        f' OR warnings:"{disease}"'
-        f' OR precautions:"{disease}"'
-        f' OR adverse_reactions:"{disease}"'
-        f' OR indications_and_usage:"{disease}"' # Sometimes disease is mentioned here for related drugs
-    )
-    params = {'search': search_query, 'limit': max_results}
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-        results = resp.json().get('results', [])
-        drugs = []
-        for entry in results:
-            info = entry.get('openfda', {})
-            # Ensure brand_name and generic_name are lists and take the first item, default to empty string
-            brand_name = info.get('brand_name', [''])[0]
-            generic_name = info.get('generic_name', [''])[0]
-            if brand_name or generic_name: # Only add if at least one name is present
-                drugs.append({
-                    'brand_name': brand_name,
-                    'generic_name': generic_name,
-                })
-        # Deduplicate results based on both brand and generic names
-        df_drugs = pd.DataFrame(drugs)
-        if not df_drugs.empty:
-            df_drugs['brand_lower'] = df_drugs['brand_name'].str.lower().str.strip()
-            df_drugs['generic_lower'] = df_drugs['generic_name'].str.lower().str.strip()
-            # Handle cases where one name is empty to ensure proper deduplication
-            df_drugs['brand_lower'] = df_drugs['brand_lower'].replace('', np.nan)
-            df_drugs['generic_lower'] = df_drugs['generic_lower'].replace('', np.nan)
-            deduplicated_drugs = df_drugs.drop_duplicates(subset=['brand_lower', 'generic_lower'], keep='first')
-            return deduplicated_drugs[['brand_name', 'generic_name']].to_dict('records')
-        return []
-    except requests.exceptions.Timeout:
-        print("API request timed out.")
-        return []
-    except requests.exceptions.RequestException as e:
-        print(f"API request failed: {e}")
-        return []
-    except Exception as e:
-        print(f"An unexpected error occurred during API fetch: {e}")
-        return []
-
-# --- Main execution for asset generation (run this script directly ONCE) ---
-if __name__ == "__main__":
-    print("--- Running Med Checker Backend Preprocessing ---")
-    # This will generate the necessary precomputed files in the current directory
-    # or the specified output_dir. Ensure RAW_ICD10_TXT_PATH is correct.
-    generate_precomputed_assets(".") # Generates files in the current directory (where this script is)
-    print("--- Preprocessing Complete ---")
-
-    # Optional: Test loading assets and search functions
-    print("\n--- Testing loaded assets and search functions ---")
-    try:
-        df_test, disease_names_test, model_test, faiss_index_test = load_app_assets()
-        print(f"Assets loaded successfully. ICD codes count: {len(df_test)}")
-
-        test_query = "systemic lupus"
-        best_match, score, method = find_best_match_combined(test_query, model_test, faiss_index_test, disease_names_test)
-        if best_match:
-            print(f"Test query '{test_query}': Best match '{best_match}' (score: {score:.2f}, method: {method})")
-            test_drugs = fetch_drug_contraindications(best_match)
-            if test_drugs:
-                print(f"Found {len(test_drugs)} drugs for '{best_match}'. Example: {test_drugs[0]}")
-            else:
-                print(f"No drugs found for '{best_match}'.")
+# ---------
+# Sentences extraction with spaCy + fuzzy matching
+def extract_relevant_sentences(text, disease_term, threshold=80, max_sentences=5):
+    doc = nlp(text)
+    matches = []
+    disease_term_lower = disease_term.lower()
+    for sent in doc.sents:
+        sent_text = sent.text.lower()
+        if disease_term_lower in sent_text:
+            matches.append(sent.text)
         else:
-            print(f"No match found for test query '{test_query}'.")
+            score = fuzz.partial_ratio(disease_term_lower, sent_text)
+            if score >= threshold:
+                matches.append(sent.text)
+        if len(matches) >= max_sentences:
+            break
+    # fallback to first 1-2 sentences if no matches
+    return matches if matches else [str(s) for s in doc.sents][:2]
+
+
+# ---------
+# Fetch detailed label info from OpenFDA and filter relevant sentences
+def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
+    base_url = "https://api.fda.gov/drug/label.json"
+    search_fields = [
+        "contraindications",
+        "warnings",
+        "precautions",
+        "adverse_reactions"
+    ]
+    search_query = f'openfda.brand_name:"{brand_name}" AND (' + \
+                   " OR ".join([f'{field}:"{disease_keyword}"' for field in search_fields]) + ")"
+    params = {
+        "search": search_query,
+        "limit": 1
+    }
+    try:
+        resp = requests.get(base_url, params=params, timeout=10)
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if not results:
+            return {}
+
+        label = results[0]
+        parsed_sections = {}
+
+        for field in search_fields:
+            texts = label.get(field)
+            if texts:
+                combined_text = " ".join(texts)
+                # Use fuzzy sentence extraction function here
+                relevant_snippets = extract_relevant_sentences(combined_text, disease_keyword)
+                snippet = " ".join(relevant_snippets)
+                if len(snippet) > max_chars:
+                    snippet = snippet[:max_chars] + "..."
+                parsed_sections[field.capitalize().replace("_", " ")] = snippet
+
+        return parsed_sections
 
     except Exception as e:
-        print(f"Error during test run: {e}")
-        print("Ensure 'generate_precomputed_assets()' was run successfully first.")
+        print(f"Error fetching label details for {brand_name}: {e}")
+        return {}
+
+
+
+# ---------------------------
+# 1. Load Assets (ICD-10 Data, Model, FAISS Index) - Cached
+@st.cache_resource(show_spinner=True)
+def cached_load_app_assets():
+    # We override loading to use relative paths for deployment
+    # If Drug_Interaction_Backend.py uses relative paths internally, no action needed
+    return load_app_assets()
+
+df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
+
+# ---------------------------
+# 2. Streamlit UI
+if 'user_text' not in st.session_state:
+    st.session_state.user_text = ''
+if 'corrected_match' not in st.session_state:
+    st.session_state.corrected_match = ''
+
+def on_input_change():
+    st.session_state.corrected_match = ''
+
+st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10)")
+
+st.write("Enter an illness to see medications with possible safety concerns related to it.")
+
+st.markdown(
+    "<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small><br><br>",
+    unsafe_allow_html=True)
+
+user_input = st.text_input(
+    "Enter disease or illness:",
+    value=st.session_state.user_text,
+    key='user_text',
+    on_change=on_input_change)
+
+if user_input:
+    match, score, method = find_best_match_combined(user_input, sbert_model, faiss_index, disease_names_list)
+
+    if not match:
+        st.warning(f"No matches found for '{user_input}'. Please check spelling or try different terms.")
+        st.session_state.corrected_match = ''
+    else:
+        icd_code_row = df_icd[df_icd['Description'] == match]
+        icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
+
+        if method == 'semantic':
+            st.success(f"Best semantic match: **{match}** (ICD-10: {icd_code}) with similarity {score:.1f}%")
+        else:
+            st.info(f"Using fallback fuzzy match: **{match}** (ICD-10: {icd_code}), similarity {score:.1f}%. "
+                    "Semantic match was below threshold or unavailable.")
+
+        st.session_state.corrected_match = match
+
+        keyword_for_api = refine_keyword_extraction(match, user_input)
+
+        with st.spinner(f"Searching FDA medication safety info for '{keyword_for_api}'..."):
+            drugs = fetch_drug_contraindications(keyword_for_api)
+
+        if not drugs:
+            st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
+        else:
+            st.success(f"Drugs with safety concerns related to **{keyword_for_api}** (from FDA):")
+            for drug in drugs:
+                brand_name = drug.get("brand_name", "Unknown")
+                generic_name = drug.get("generic_name", "Unknown")
+                st.markdown(f"### {brand_name} ({generic_name})")
+
+                label_info = fetch_drug_label_details(brand_name, keyword_for_api)
+                if label_info:
+                    for section_title, text_snippet in label_info.items():
+                        st.markdown(f"**{section_title}:**")
+                        st.write(text_snippet)
+                else:
+                    st.write("ℹ️ No detailed label safety information found mentioning this illness.")
 
 
 
