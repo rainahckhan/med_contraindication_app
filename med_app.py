@@ -117,11 +117,15 @@ def on_input_change():
 st.title("Medication Contraindication Checker (Information Obtained from OpenFDA API)")
 st.write("Enter an illness to see which medications adversely interact with it (FDA label contraindications).")
 st.markdown(
-    "<small><em>Disclaimer: This application is for educational and informational purposes only, and does not constitute medical advice, diagnosis, or treatment.\
-    Do not rely on this application for medical decision-making. Always consult a qualified healthcare provider with any questions you may have regarding a medical condition.\
-    If you are experiencing a medical emergency, call your local emergency number or seek care immediately.<br>
-    The creators and developers of this application accept no liability for any harm or loss resulting from your reliance on the information provided.</em></small>",
-    unsafe_allow_html=True
+    """
+    <small>
+      <em>
+        Disclaimer: This application is for educational and informational purposes only, and does not constitute medical advice, diagnosis, or treatment. Do not rely on this application for medical decision-making. Always consult a qualified healthcare provider with any questions you may have regarding a medical condition. If you are experiencing a medical emergency, call your local emergency number or seek care immediately.<br>
+        The creators and developers of this application accept no liability for any harm or loss resulting from your reliance on the information provided.
+      </em>
+    </small>
+    """,
+    unsafe_allow_html=True,
 )
 
 df, disease_names = load_data()
