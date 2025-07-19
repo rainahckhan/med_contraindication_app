@@ -1,7 +1,5 @@
-import os
 import streamlit as st
 import pandas as pd
-import numpy as np
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 
 # ---------------------------
@@ -92,6 +90,7 @@ if user_input:
             st.dataframe(drug_df[["brand_name", "generic_name"]])
         else:
             st.info(f"No FDA medication labels mentioning '{keyword_for_api}' found in contraindications or related fields.")
+
 # import os
 # import streamlit as st
 # import pandas as pd
