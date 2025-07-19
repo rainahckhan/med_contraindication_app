@@ -42,12 +42,12 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Exact match (case insensitive)
+    # 1. Exact match first
     for d in candidate_names:
         if d.lower() == input_clean:
             return d, 100
 
-    # 2. Fuzzy match among names with length difference at most 1
+    # 2. Fuzzy match (length difference <=1)
     similar_length_names = [
         d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
     ]
@@ -62,26 +62,44 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4)
         best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
         return best_match, best_score
 
-    # 3. Word-boundary substring match (only exact whole words)
+    # 3. Word boundary substring match (exact whole word)
     pattern = re.compile(rf'\b{re.escape(input_clean)}\b')
     substr_matches = [d for d in candidate_names if pattern.search(d.lower())]
     if substr_matches:
-        # Prefer shortest disease name so "anxiety" < "anxiety disorder"
-        best_substr_match = min(substr_matches, key=len)
-        if len(best_substr_match) == len(input_clean):
-            return best_substr_match, 100
+        best_substr = min(substr_matches, key=len)
+        if len(best_substr) == len(input_clean):
+            return best_substr, 100
 
-    # 4. Substring anywhere in disease name (more relaxed)
+    # 4. Relaxed substring matching with suffix prioritization only for exact root matches
     relaxed_substr_matches = [
         d for d in candidate_names if input_clean in d.lower()
     ]
     if relaxed_substr_matches:
-        # Pick the shortest disease name containing the input substring; 
-        # or you could sort by frequency/popularity if available.
-        best_relaxed_match = min(relaxed_substr_matches, key=len)
-        return best_relaxed_match, 90  # Lower confidence score
+        # Suffixes to prioritize, but only if input is a standalone root word
+        suffixes = ['disorder', 'syndrome', 'disease', 'condition']
 
-    # If nothing found return None
+        # Find matches with suffixes appended, only if they start with input_clean
+        prioritized_matches = [
+            d for d in relaxed_substr_matches
+            if d.lower().startswith(input_clean) and
+               any(d.lower().endswith(suffix) or f' {suffix}' in d.lower() for suffix in suffixes)
+        ]
+
+        # Prefer exact input_clean matches first (without suffix)
+        exact_root_matches = [
+            d for d in relaxed_substr_matches if d.lower() == input_clean
+        ]
+        if exact_root_matches:
+            return exact_root_matches[0], 95  # High but less than 100
+
+        if prioritized_matches:
+            best_prioritized = min(prioritized_matches, key=len)
+            return best_prioritized, 90
+
+        # Fallback shortest relaxed substring match
+        best_relaxed = min(relaxed_substr_matches, key=len)
+        return best_relaxed, 85
+
     return None, 0
 
 
