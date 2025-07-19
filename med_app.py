@@ -15,7 +15,7 @@ df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 
 # ---------
 # Helper function to refine keyword extraction for API query
-import re
+
 
 def refine_keyword_extraction_v2(matched_disease, user_input):
     """
