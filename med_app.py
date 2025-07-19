@@ -28,15 +28,6 @@ nlp = spacy.load("en_core_web_sm")
 def refine_keyword_extraction(matched_disease, user_input, sbert_model=None, similarity_threshold=0.7):
     """
     Refine keyword for OpenFDA query by dynamic semantic similarity between matched disease and user input substrings.
-    
-    Parameters:
-        matched_disease (str): ICD-10 matched disease string.
-        user_input (str): Original user input.
-        sbert_model: Sentence transformer model (must have encode method).
-        similarity_threshold (float): Minimum cosine similarity to accept a substring.
-    
-    Returns:
-        str: Best keyword or phrase to query OpenFDA.
     """
     def normalize(text):
         return re.sub(r'[^\w\s]', '', text.lower()).strip()
@@ -56,7 +47,6 @@ def refine_keyword_extraction(matched_disease, user_input, sbert_model=None, sim
     max_phrase_len = min(5, len(user_words))  # limit phrase length
     candidates = set()
 
-    # Generate all candidate substrings up to max length
     for length in range(max_phrase_len, 0, -1):
         for start in range(len(user_words) - length + 1):
             phrase = " ".join(user_words[start:start+length])
@@ -120,7 +110,6 @@ def highlight_keyword(text, keyword):
     escaped_text = html.escape(text)
     escaped_keyword = html.escape(keyword)
     
-    # Simple case-insensitive highlight by wrapping keyword in <mark> tags
     import re
     pattern = re.compile(re.escape(escaped_keyword), re.IGNORECASE)
     highlighted = pattern.sub(r'<mark>\g<0></mark>', escaped_text)
@@ -160,7 +149,6 @@ def fetch_drug_label_details(brand_name, disease_keyword, max_chars=1000):
                 combined_text = " ".join(texts)
                 relevant_sentences = extract_relevant_sentences(combined_text, disease_keyword)
                 
-                # Join sentences for display, limit length
                 snippet = " ".join(relevant_sentences)
                 if len(snippet) > max_chars:
                     snippet = snippet[:max_chars] + "..."
@@ -190,12 +178,11 @@ def on_input_change():
 
 st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10)")
 
-st.write("Enter an illness to see medications with possible safety concerns related to it.")
-
 st.markdown("""
 <small>
 <em>
-<b>Disclaimer:</b> This application is intended for educational and informational purposes only. It is not a substitute for professional medical advice, diagnosis, or treatment. \
+<b>Disclaimer:</b> This application is intended for educational and informational purposes only. \
+It is not a substitute for professional medical advice, diagnosis, or treatment. \
 Always seek the advice of a qualified healthcare provider with any questions regarding a medical condition or medication. \
 Reliance on any information provided by this app is solely at your own risk. \
 The developers and providers of this app disclaim all liability for any damages or adverse consequences resulting from use of the information herein.
@@ -204,6 +191,7 @@ The developers and providers of this app disclaim all liability for any damages 
 <br><br>
 """, unsafe_allow_html=True)
 
+st.write("Enter an illness to see medications with possible safety concerns related to it.")
 
 user_input = st.text_input(
     "Enter disease or illness:",
@@ -229,7 +217,6 @@ if user_input:
 
         st.session_state.corrected_match = match
 
-        # Use enhanced semantic refine for keyword extraction
         keyword_for_api = refine_keyword_extraction(
             match,
             user_input,
@@ -247,23 +234,24 @@ if user_input:
             for drug in drugs:
                 brand_name = drug.get("brand_name", "Unknown")
                 generic_name = drug.get("generic_name", "Unknown")
-                st.markdown(f"### {brand_name} ({generic_name})")
+
+                st.markdown("---")
+                st.markdown(f"## {brand_name} ({generic_name})")
 
                 label_info = fetch_drug_label_details(brand_name, keyword_for_api)
                 if label_info:
                     for section_title, info in label_info.items():
                         if isinstance(info, dict):
-                            st.markdown(f"**{section_title}:**")
-                            for sentence in info.get("sentences", []):
-                                # Highlight disease keyword inside sentence
-                                highlighted_sentence = highlight_keyword(sentence, keyword_for_api)
-                                st.markdown(highlighted_sentence, unsafe_allow_html=True)
+                            with st.expander(f"{section_title}"):
+                                for sentence in info.get("sentences", []):
+                                    highlighted_sentence = highlight_keyword(sentence, keyword_for_api)
+                                    st.markdown(highlighted_sentence, unsafe_allow_html=True)
                         else:
-                            # fallback if text only
-                            st.markdown(f"**{section_title}:**")
-                            st.write(info)
+                            with st.expander(section_title):
+                                st.write(info)
                 else:
                     st.write("ℹ️ No detailed label safety information found mentioning this illness.")
+
 
 
 
