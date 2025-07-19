@@ -4,40 +4,15 @@ import pandas as pd
 import re
 from rapidfuzz import process, fuzz
 
+
 @st.cache_resource
 def load_data():
     parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
     df = pd.read_parquet(parquet_path)
-
-    # Use the official Description column from the new file
     disease_names = sorted(df['Description'].dropna().unique())
     return df, disease_names
 
-
 st.cache_data.clear()
-# def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
-#     if not user_input or not disease_names:
-#         return None, 0
-
-    # input_clean = user_input.lower().strip()
-    # candidate_names = [d for d in disease_names if len(d) >= min_length]
-
-    # matches = process.extract(
-    #     input_clean,
-    #     candidate_names,
-    #     scorer=fuzz.WRatio,
-    #     limit=5,
-    #     score_cutoff=threshold
-    # )
-
-    # input_len = len(input_clean)
-    # for match, score, _ in matches:
-    #     if len(match) >= 0.7 * input_len:
-    #         return match, score
-
-    # return None, 0
-
-
 
 def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4, popularity_dict=None):
     if not user_input or not disease_names:
@@ -82,8 +57,15 @@ def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4,
 def fetch_drug_contraindications(disease, max_results=50):
     import requests
     url = 'https://api.fda.gov/drug/label.json'
+    # Multi-field search query excluding indications_and_usage
+    search_query = (
+        f'contraindications:"{disease}"'
+        f' OR warnings:"{disease}"'
+        f' OR precautions:"{disease}"'
+        f' OR adverse_reactions:"{disease}"'
+    )
     params = {
-        'search': f'contraindications:"{disease}"',
+        'search': search_query,
         'limit': max_results
     }
     try:
@@ -96,11 +78,17 @@ def fetch_drug_contraindications(disease, max_results=50):
             info = entry.get('openfda', {})
             drugs.append({
                 'brand_name': info.get('brand_name', [''])[0],
-                'generic_name': info.get('generic_name', [''])[0]
+                'generic_name': info.get('generic_name', [''])[0],
+                # Optionally, add these if you want to show context:
+                # 'contraindications': ' '.join(entry.get('contraindications', [])),
+                # 'warnings': ' '.join(entry.get('warnings', [])),
+                # 'precautions': ' '.join(entry.get('precautions', [])),
+                # 'adverse_reactions': ' '.join(entry.get('adverse_reactions', [])),
             })
         return drugs
     except Exception:
         return []
+
 
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
@@ -141,15 +129,14 @@ if user_input:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
         st.session_state.corrected_match = ''
     else:
-        # Get ICD code corresponding to matched description
         icd_code_row = df[df['Description'] == match]
         icd_code = icd_code_row['Code'].values[0] if not icd_code_row.empty else 'Unknown'
-        
+
         if match.lower() != user_input.lower() or score < 100:
             st.info(f"Did you mean **{match}** (ICD-10-CM code: {icd_code})? Results shown for closest match.")
         st.session_state.corrected_match = match
 
-        with st.spinner(f"Searching FDA contraindications for {match}..."):
+        with st.spinner(f"Searching FDA medication safety information for {match}..."):
             drugs = fetch_drug_contraindications(match)
 
         if drugs:
@@ -162,12 +149,13 @@ if user_input:
             deduped = filtered.drop_duplicates(subset=['_brand_lower', '_generic_lower'])
             deduped = deduped.drop(columns=['_brand_lower', '_generic_lower'])
             if not deduped.empty:
-                st.success(f"Drugs contraindicated for **{match}**, please consult a doctor before using:")
+                st.success(f"Drugs with safety concerns related to **{match}**, please consult a doctor before use:")
                 st.dataframe(deduped[["brand_name", "generic_name"]])
             else:
-                st.info(f"No drugs with brand or generic names found for '{match}'.")
+                st.info(f"No drugs with brand or generic names found mentioning '{match}'.")
         else:
-            st.info(f"No FDA medication label lists '{match}' in its contraindications.")
+            st.info(f"No FDA medication labels found mentioning '{match}' in contraindications, warnings, precautions, or adverse reactions.")
+
 
 
 
