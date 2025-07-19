@@ -15,25 +15,24 @@ df_icd, disease_names_list, sbert_model, faiss_index = cached_load_app_assets()
 
 # ---------
 # Helper function to refine keyword extraction for API query
-def refine_keyword_extraction(matched_disease, user_input):
+import re
+
+def refine_keyword_extraction_v2(matched_disease, user_input):
     """
-    Extracts relevant disease keywords from matched_disease by aligning with user_input,
-    without removing medically important words.
-    
-    Steps:
-    - Normalize input and match text
-    - Try to find the longest exact substring from user_input in matched_disease
-    - If none, find intersection of words maintaining order
-    - Fallback: returns longest word in user_input
+    Prioritizes the user input phrase for the API query.
+    Only falls back to longer substrings or overlapping words if user input phrase not present.
     """
     def normalize(text):
-        # Lowercase and remove punctuation for matching
         return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
     matched_norm = normalize(matched_disease)
     user_norm = normalize(user_input)
 
-    # 1. Try to find longest contiguous substring of user input inside matched description
+    # 1. If entire user input phrase appears in matched disease, prefer that
+    if user_norm and user_norm in matched_norm:
+        return user_norm
+
+    # 2. Else, try to find longest contiguous substring from user input inside matched disease
     user_words = user_norm.split()
     longest_span = ""
     for start in range(len(user_words)):
@@ -42,22 +41,24 @@ def refine_keyword_extraction(matched_disease, user_input):
             if span and span in matched_norm:
                 if len(span) > len(longest_span):
                     longest_span = span
-
     if longest_span:
         return longest_span
 
-    # 2. If no exact phrase match, find longest overlapping words in order
+    # 3. Else, find common words between user input and matched disease preserving order
     matched_words = matched_norm.split()
     common_words = [word for word in user_words if word in matched_words]
-
     if common_words:
         return " ".join(common_words)
 
-    # 3. Fallback to longest word in user input (most descriptive)
-    if user_words:
-        return max(user_words, key=len)
+    # 4. Fallback: return user input itself if present
+    if user_norm:
+        return user_norm
 
-    # If all fails, return original matched disease
+    # 5. As last fallback, return longest word in matched disease
+    if matched_norm:
+        return max(matched_norm.split(), key=len)
+
+    # Default fallback: original matched disease
     return matched_disease.lower()
 
 
