@@ -10,85 +10,129 @@
 
 # In[2]:
 import pandas as pd
-import re
-import spacy
-from tqdm import tqdm
 
 # -------------------
 # 1. Parameters
 # -------------------
-infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10OrderFiles2025_0\icd10cm_order_2025.txt"
-outfile = r"icd10_preprocessed.parquet"   # Use .csv if you prefer!
+infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10cm-Code Descriptions-2026\icd10cm-codes-2026.txt"
+outfile = r"icd10_preprocessed.parquet"   # Output file to use in your app
 
 # -------------------
-# 2. Helpers
+# 2. Load and parse official ICD-10-CM codes/descriptions
 # -------------------
-def clean_text_minimal(text):
-    """Lowercase and strip, but keep all punctuation for better NLP parsing."""
-    return text.lower().strip()
+def load_icd10cm_codes(filepath):
+    data = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts = line.strip().split(maxsplit=1)  # Split into [code, description]
+            if len(parts) == 2:
+                code, desc = parts
+                # Insert decimal point after 3rd character if missing and code length > 3
+                if len(code) > 3 and '.' not in code:
+                    code = code[:3] + '.' + code[3:]
+                data.append((code, desc))
+    df = pd.DataFrame(data, columns=['Code', 'Description'])
+    return df
 
-def extract_main_disease_from_doc(doc):
-    """
-    Extract the main disease as the longest noun chunk text.
-    Falls back to longest noun token lemma if no noun chunks found.
-    """
-    noun_chunks = list(doc.noun_chunks)
-    if noun_chunks:
-        # Return the longest noun chunk text (preserves phrase)
-        return max(noun_chunks, key=lambda chunk: len(chunk.text)).text.strip()
+# -------------------
+# 3. Run loading and export
+# -------------------
+df_icd = load_icd10cm_codes(infile)
+
+# Optional: sort by code for neatness
+df_icd = df_icd.sort_values('Code').reset_index(drop=True)
+
+print(f"Loaded {len(df_icd):,} ICD-10-CM codes with descriptions.")
+
+# -------------------
+# 4. Save dataframe as parquet
+# -------------------
+df_icd.to_parquet(outfile)
+print(f"Exported preprocessed ICD-10-CM data to: {outfile}")
+
+
+
+#-------------------------------------------------------------------------------------------------------------------------------
+# import pandas as pd
+# import re
+# import spacy
+# from tqdm import tqdm
+
+# # -------------------
+# # 1. Parameters
+# # -------------------
+# infile = r"C:\Users\slk20\Documents\Drug Interaction App\icd10OrderFiles2025_0\icd10cm_order_2025.txt"
+# outfile = r"icd10_preprocessed.parquet"   # Use .csv if you prefer!
+
+# # -------------------
+# # 2. Helpers
+# # -------------------
+# def clean_text_minimal(text):
+#     """Lowercase and strip, but keep all punctuation for better NLP parsing."""
+#     return text.lower().strip()
+
+# def extract_main_disease_from_doc(doc):
+#     """
+#     Extract the main disease as the longest noun chunk text.
+#     Falls back to longest noun token lemma if no noun chunks found.
+#     """
+#     noun_chunks = list(doc.noun_chunks)
+#     if noun_chunks:
+#         # Return the longest noun chunk text (preserves phrase)
+#         return max(noun_chunks, key=lambda chunk: len(chunk.text)).text.strip()
     
-    # Fallback: longest noun lemma (single word)
-    disease_terms = [token.lemma_ for token in doc if token.pos_ == "NOUN" and not token.is_stop]
-    if disease_terms:
-        return max(disease_terms, key=len)
+#     # Fallback: longest noun lemma (single word)
+#     disease_terms = [token.lemma_ for token in doc if token.pos_ == "NOUN" and not token.is_stop]
+#     if disease_terms:
+#         return max(disease_terms, key=len)
     
-    # Last fallback: last word in the doc text
-    return doc.text.split()[-1]
+#     # Last fallback: last word in the doc text
+#     return doc.text.split()[-1]
 
-# -------------------
-# 3. Load Raw Data
-# -------------------
-rows = []
-with open(infile, 'r', encoding='utf-8') as f:
-    for line in f:
-        parts = line.strip().split(maxsplit=3)
-        if len(parts) == 4:
-            rows.append(parts)
-        else:
-            continue  # skip malformed lines
+# # -------------------
+# # 3. Load Raw Data
+# # -------------------
+# rows = []
+# with open(infile, 'r', encoding='utf-8') as f:
+#     for line in f:
+#         parts = line.strip().split(maxsplit=3)
+#         if len(parts) == 4:
+#             rows.append(parts)
+#         else:
+#             continue  # skip malformed lines
 
-df = pd.DataFrame(rows, columns=['RowID', 'Code', 'Flag', 'FullDescription'])
-df['FullDescription_only'] = df['FullDescription'].str.split(r'\s{2,}', regex=True).str[0]
+# df = pd.DataFrame(rows, columns=['RowID', 'Code', 'Flag', 'FullDescription'])
+# df['FullDescription_only'] = df['FullDescription'].str.split(r'\s{2,}', regex=True).str[0]
 
-# Now apply minimal cleaning to preserve punctuation for NLP
-df['CleanDescription'] = df['FullDescription_only'].apply(clean_text_minimal)
+# # Now apply minimal cleaning to preserve punctuation for NLP
+# df['CleanDescription'] = df['FullDescription_only'].apply(clean_text_minimal)
 
-# -------------------
-# 4. NLP Extraction (spaCy, batched with progress bar)
-# -------------------
-print("Processing disease terms with spaCy, this may take a while on first run...")
+# # -------------------
+# # 4. NLP Extraction (spaCy, batched with progress bar)
+# # -------------------
+# print("Processing disease terms with spaCy, this may take a while on first run...")
 
-nlp = spacy.load("en_core_web_sm")
-descriptions = df["CleanDescription"].astype(str).tolist()
-results = []
-batch_size = 500
+# nlp = spacy.load("en_core_web_sm")
+# descriptions = df["CleanDescription"].astype(str).tolist()
+# results = []
+# batch_size = 500
 
-for batch_start in tqdm(range(0, len(descriptions), batch_size), desc="spaCy NLP"):
-    batch = descriptions[batch_start:batch_start + batch_size]
-    docs = nlp.pipe(batch, batch_size=batch_size)
-    results.extend(extract_main_disease_from_doc(doc) for doc in docs)
+# for batch_start in tqdm(range(0, len(descriptions), batch_size), desc="spaCy NLP"):
+#     batch = descriptions[batch_start:batch_start + batch_size]
+#     docs = nlp.pipe(batch, batch_size=batch_size)
+#     results.extend(extract_main_disease_from_doc(doc) for doc in docs)
 
-df['GeneralDisease'] = results
+# df['GeneralDisease'] = results
 
-# -------------------
-# 5. Save Preprocessed Table (only essential columns, as Parquet)
-# -------------------
-df_out = df[['Code', 'GeneralDisease', 'CleanDescription']]
-df_out = df_out.drop_duplicates().reset_index(drop=True)
+# # -------------------
+# # 5. Save Preprocessed Table (only essential columns, as Parquet)
+# # -------------------
+# df_out = df[['Code', 'GeneralDisease', 'CleanDescription']]
+# df_out = df_out.drop_duplicates().reset_index(drop=True)
 
-# Save in compact, fast format
-df_out.to_parquet(outfile)
-print(f"\nExported {len(df_out):,} rows to: {outfile}")
+# # Save in compact, fast format
+# df_out.to_parquet(outfile)
+# print(f"\nExported {len(df_out):,} rows to: {outfile}")
 
 
 
