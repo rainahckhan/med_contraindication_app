@@ -2,7 +2,9 @@ import os
 import streamlit as st
 import pandas as pd
 import re
+import requests
 from rapidfuzz import process, fuzz
+from collections import Counter
 
 @st.cache_resource
 def load_data():
@@ -11,79 +13,49 @@ def load_data():
     disease_names = sorted(df['GeneralDisease'].dropna().unique())
     return df, disease_names
 
-# def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
-#     if not user_input or not disease_names:
-#         return None, 0
+@st.cache_resource
+def build_popularity_dict(df):
+    # Count frequency of disease names (lowercase) for popularity ranking
+    disease_freq = Counter(df['GeneralDisease'].dropna().str.lower())
+    return dict(disease_freq)
 
-    # input_clean = user_input.lower().strip()
-    # candidate_names = [d for d in disease_names if len(d) >= min_length]
-
-    # matches = process.extract(
-    #     input_clean,
-    #     candidate_names,
-    #     scorer=fuzz.WRatio,
-    #     limit=5,
-    #     score_cutoff=threshold
-    # )
-
-    # input_len = len(input_clean)
-    # for match, score, _ in matches:
-    #     if len(match) >= 0.7 * input_len:
-    #         return match, score
-
-    # return None, 0
-
-
-
-def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4, popularity_dict=None):
+def fuzzy_find_candidates(user_input, disease_names, popularity_dict, threshold=70, max_candidates=10, min_length=4):
     if not user_input or not disease_names:
-        return None, 0
+        return []
 
     input_clean = user_input.lower().strip()
     candidate_names = [d for d in disease_names if len(d) >= min_length]
 
-    # 1. Exact match
-    for d in candidate_names:
-        if d.lower() == input_clean:
-            return d, 100
+    # 1. Exact matches first
+    exact_matches = [d for d in candidate_names if d.lower() == input_clean]
+    if exact_matches:
+        return exact_matches[:3]
 
-    # 2. Fuzzy match with threshold
-    similar_length_names = [
-        d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
-    ]
+    # 2. Fuzzy matches
     fuzzy_matches = process.extract(
         input_clean,
-        similar_length_names,
+        candidate_names,
         scorer=fuzz.WRatio,
-        limit=5,
+        limit=max_candidates,
         score_cutoff=threshold
     )
+
     if fuzzy_matches:
-        best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
-        return best_match, best_score
+        candidates = [match for match, score, _ in fuzzy_matches]
+    else:
+        # 3. fallback: substring matches anywhere in the disease name
+        candidates = [d for d in candidate_names if input_clean in d.lower()]
 
-    # 3. Substring matches anywhere
-    substr_matches = [d for d in candidate_names if input_clean in d.lower()]
-    if substr_matches:
-        # If popularity_dict provided, sort by popularity descending
-        if popularity_dict:
-            substr_matches.sort(key=lambda x: popularity_dict.get(x.lower(), 0), reverse=True)
-        else:
-            # fallback: shorter names first as proxy for popularity
-            substr_matches.sort(key=len)
+    # Sort candidates by popularity descending (default 0)
+    candidates.sort(key=lambda d: popularity_dict.get(d.lower(), 0), reverse=True)
 
-        return substr_matches[0], 85  # confidence score indicating fallback substring match
-
-    # No match at all
-    return None, 0
-
+    return candidates[:3]  # top 3 popular matches
 
 @st.cache_data(show_spinner=False)
 def fetch_drug_contraindications(disease, max_results=50):
-    import requests
     url = 'https://api.fda.gov/drug/label.json'
     params = {
-        'search': f'contraindications:{disease}',
+        'search': f'contraindications:"{disease}"',
         'limit': max_results
     }
     try:
@@ -102,14 +74,12 @@ def fetch_drug_contraindications(disease, max_results=50):
     except Exception:
         return []
 
-# Initialize session state keys and defaults
 if 'user_text' not in st.session_state:
     st.session_state.user_text = ''
 
 if 'corrected_match' not in st.session_state:
     st.session_state.corrected_match = ''
 
-# Callback to handle input changes and clear corrected_match
 def on_input_change():
     st.session_state.corrected_match = ''  # Reset corrected match on new input
 
@@ -122,8 +92,8 @@ st.markdown(
 )
 
 df, disease_names = load_data()
+popularity_dict = build_popularity_dict(df)
 
-# Controlled text input with key and on_change callback
 user_input = st.text_input(
     "Enter a disease or illness:",
     value=st.session_state.user_text,
@@ -131,34 +101,29 @@ user_input = st.text_input(
     on_change=on_input_change
 )
 
-# Do NOT assign st.session_state.user_text = user_input here!
-# Streamlit already manages this for you based on the 'key'
-
-# if user_input:
-#     match, score = fuzzy_find_best_match(user_input, disease_names)
-#     if not match:
-#         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
-#         st.session_state.corrected_match = ''
-#     else:
-#         if match.lower() != user_input.lower():
-#             st.info(f"Did you mean **{match}**? Results shown for closest match.")
-#         st.session_state.corrected_match = match
-
-#         with st.spinner(f"Searching FDA contraindications for {match}..."):
-#             drugs = fetch_drug_contraindications(match)
 if user_input:
-    match, score = fuzzy_find_best_match(user_input, disease_names)
-    if not match:
+    candidates = fuzzy_find_candidates(user_input, disease_names, popularity_dict)
+
+    if not candidates:
         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
         st.session_state.corrected_match = ''
+    elif len(candidates) == 1:
+        selected = candidates[0]
+        st.session_state.corrected_match = selected
+        if selected.lower() != user_input.lower():
+            st.info(f"Results shown for **{selected}**.")
     else:
-        # Notify only if suggested match differs case-insensitive or score < 100
-        if match.lower() != user_input.lower() or score < 100:
-            st.info(f"Did you mean **{match}**? Results shown for closest match.")
-        st.session_state.corrected_match = match
+        selected = st.selectbox("Multiple matches found, please select the correct illness:", candidates)
+        if selected:
+            st.session_state.corrected_match = selected
+            # Optionally show that this is a selected alternative:
+            if selected.lower() != user_input.lower():
+                st.info(f"Results shown for **{selected}**.")
 
-        with st.spinner(f"Searching FDA contraindications for {match}..."):
-            drugs = fetch_drug_contraindications(match)
+    # Fetch and show contraindicated drugs for the selected illness
+    if st.session_state.corrected_match:
+        with st.spinner(f"Searching FDA contraindications for {st.session_state.corrected_match}..."):
+            drugs = fetch_drug_contraindications(st.session_state.corrected_match)
 
         if drugs:
             drug_df = pd.DataFrame(drugs)
@@ -170,12 +135,192 @@ if user_input:
             deduped = filtered.drop_duplicates(subset=['_brand_lower', '_generic_lower'])
             deduped = deduped.drop(columns=['_brand_lower', '_generic_lower'])
             if not deduped.empty:
-                st.success(f"Drugs contraindicated for **{match}**, please consult a doctor before using:")
+                st.success(f"Drugs contraindicated for **{st.session_state.corrected_match}**, please consult a doctor before using:")
                 st.dataframe(deduped[["brand_name", "generic_name"]])
             else:
-                st.info(f"No drugs with brand or generic names found for '{match}'.")
+                st.info(f"No drugs with brand or generic names found for '{st.session_state.corrected_match}'.")
         else:
-            st.info(f"No FDA medication label lists '{match}' in its contraindications.")
+            st.info(f"No FDA medication label lists '{st.session_state.corrected_match}' in its contraindications.")
+
+# ------------------------------------------------------------------------------------------------------------------
+# import os
+# import streamlit as st
+# import pandas as pd
+# import re
+# from rapidfuzz import process, fuzz
+
+# @st.cache_resource
+# def load_data():
+#     parquet_path = os.path.join(os.path.dirname(__file__), "icd10_preprocessed.parquet")
+#     df = pd.read_parquet(parquet_path)
+#     disease_names = sorted(df['GeneralDisease'].dropna().unique())
+#     return df, disease_names
+
+# # def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4):
+# #     if not user_input or not disease_names:
+# #         return None, 0
+
+#     # input_clean = user_input.lower().strip()
+#     # candidate_names = [d for d in disease_names if len(d) >= min_length]
+
+#     # matches = process.extract(
+#     #     input_clean,
+#     #     candidate_names,
+#     #     scorer=fuzz.WRatio,
+#     #     limit=5,
+#     #     score_cutoff=threshold
+#     # )
+
+#     # input_len = len(input_clean)
+#     # for match, score, _ in matches:
+#     #     if len(match) >= 0.7 * input_len:
+#     #         return match, score
+
+#     # return None, 0
+
+
+
+# def fuzzy_find_best_match(user_input, disease_names, threshold=80, min_length=4, popularity_dict=None):
+#     if not user_input or not disease_names:
+#         return None, 0
+
+#     input_clean = user_input.lower().strip()
+#     candidate_names = [d for d in disease_names if len(d) >= min_length]
+
+#     # 1. Exact match
+#     for d in candidate_names:
+#         if d.lower() == input_clean:
+#             return d, 100
+
+#     # 2. Fuzzy match with threshold
+#     similar_length_names = [
+#         d for d in candidate_names if abs(len(d) - len(input_clean)) <= 1
+#     ]
+#     fuzzy_matches = process.extract(
+#         input_clean,
+#         similar_length_names,
+#         scorer=fuzz.WRatio,
+#         limit=5,
+#         score_cutoff=threshold
+#     )
+#     if fuzzy_matches:
+#         best_match, best_score, _ = max(fuzzy_matches, key=lambda x: x[1])
+#         return best_match, best_score
+
+#     # 3. Substring matches anywhere
+#     substr_matches = [d for d in candidate_names if input_clean in d.lower()]
+#     if substr_matches:
+#         # If popularity_dict provided, sort by popularity descending
+#         if popularity_dict:
+#             substr_matches.sort(key=lambda x: popularity_dict.get(x.lower(), 0), reverse=True)
+#         else:
+#             # fallback: shorter names first as proxy for popularity
+#             substr_matches.sort(key=len)
+
+#         return substr_matches[0], 85  # confidence score indicating fallback substring match
+
+#     # No match at all
+#     return None, 0
+
+
+# @st.cache_data(show_spinner=False)
+# def fetch_drug_contraindications(disease, max_results=50):
+#     import requests
+#     url = 'https://api.fda.gov/drug/label.json'
+#     params = {
+#         'search': f'contraindications:{disease}',
+#         'limit': max_results
+#     }
+#     try:
+#         resp = requests.get(url, params=params, timeout=10)
+#         if resp.status_code != 200:
+#             return []
+#         results = resp.json().get('results', [])
+#         drugs = []
+#         for entry in results:
+#             info = entry.get('openfda', {})
+#             drugs.append({
+#                 'brand_name': info.get('brand_name', [''])[0],
+#                 'generic_name': info.get('generic_name', [''])[0]
+#             })
+#         return drugs
+#     except Exception:
+#         return []
+
+# # Initialize session state keys and defaults
+# if 'user_text' not in st.session_state:
+#     st.session_state.user_text = ''
+
+# if 'corrected_match' not in st.session_state:
+#     st.session_state.corrected_match = ''
+
+# # Callback to handle input changes and clear corrected_match
+# def on_input_change():
+#     st.session_state.corrected_match = ''  # Reset corrected match on new input
+
+# st.title("Medication Contraindication Checker (Information Obtained from OpenFDA API)")
+# st.write("Enter an illness to see which medications adversely interact with it (FDA label contraindications).")
+# st.markdown(
+#     "<small><em>Disclaimer: This application is for educational purposes only.\
+#           Please consult a medical professional if you believe you are having a life-threatening reaction.</em></small>",
+#     unsafe_allow_html=True
+# )
+
+# df, disease_names = load_data()
+
+# # Controlled text input with key and on_change callback
+# user_input = st.text_input(
+#     "Enter a disease or illness:",
+#     value=st.session_state.user_text,
+#     key='user_text',
+#     on_change=on_input_change
+# )
+
+# # Do NOT assign st.session_state.user_text = user_input here!
+# # Streamlit already manages this for you based on the 'key'
+
+# # if user_input:
+# #     match, score = fuzzy_find_best_match(user_input, disease_names)
+# #     if not match:
+# #         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
+# #         st.session_state.corrected_match = ''
+# #     else:
+# #         if match.lower() != user_input.lower():
+# #             st.info(f"Did you mean **{match}**? Results shown for closest match.")
+# #         st.session_state.corrected_match = match
+
+# #         with st.spinner(f"Searching FDA contraindications for {match}..."):
+# #             drugs = fetch_drug_contraindications(match)
+# if user_input:
+#     match, score = fuzzy_find_best_match(user_input, disease_names)
+#     if not match:
+#         st.warning(f"No matches found for '{user_input}'. Please check spelling or try different wording.")
+#         st.session_state.corrected_match = ''
+#     else:
+#         # Notify only if suggested match differs case-insensitive or score < 100
+#         if match.lower() != user_input.lower() or score < 100:
+#             st.info(f"Did you mean **{match}**? Results shown for closest match.")
+#         st.session_state.corrected_match = match
+
+#         with st.spinner(f"Searching FDA contraindications for {match}..."):
+#             drugs = fetch_drug_contraindications(match)
+
+#         if drugs:
+#             drug_df = pd.DataFrame(drugs)
+#             drug_df['brand_name'] = drug_df['brand_name'].astype(str).str.strip()
+#             drug_df['generic_name'] = drug_df['generic_name'].astype(str).str.strip()
+#             filtered = drug_df[(drug_df['brand_name'] != "") | (drug_df['generic_name'] != "")]
+#             filtered['_brand_lower'] = filtered['brand_name'].str.lower()
+#             filtered['_generic_lower'] = filtered['generic_name'].str.lower()
+#             deduped = filtered.drop_duplicates(subset=['_brand_lower', '_generic_lower'])
+#             deduped = deduped.drop(columns=['_brand_lower', '_generic_lower'])
+#             if not deduped.empty:
+#                 st.success(f"Drugs contraindicated for **{match}**, please consult a doctor before using:")
+#                 st.dataframe(deduped[["brand_name", "generic_name"]])
+#             else:
+#                 st.info(f"No drugs with brand or generic names found for '{match}'.")
+#         else:
+#             st.info(f"No FDA medication label lists '{match}' in its contraindications.")
 
 
 
