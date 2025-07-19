@@ -34,6 +34,8 @@ st.markdown(
     "<small><em>This is for educational purposes only. Not a substitute for professional medical advice.</em></small><br><br>",
     unsafe_allow_html=True)
 
+
+
 user_input = st.text_input(
     "Enter disease or illness:",
     value=st.session_state.user_text,
