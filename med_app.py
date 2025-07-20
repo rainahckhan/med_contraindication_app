@@ -176,7 +176,7 @@ if 'corrected_match' not in st.session_state:
 def on_input_change():
     st.session_state.corrected_match = ''
 
-st.title("Medication Contraindication Checker (OpenFDA & Semantic ICD-10)")
+st.title("Medication Safety and Potential Adverse Effects Lookup(OpenFDA & Semantic ICD-10)")
 
 st.markdown("""
 <small>
