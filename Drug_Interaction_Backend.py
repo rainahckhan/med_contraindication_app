@@ -20,7 +20,7 @@ from rapidfuzz import process, fuzz
 # --- Configuration and File Paths ---
 # You can adjust these paths if your raw data or precomputed files are elsewhere
 # Note: For deployment, ensure these paths are relative to your app's root
-RAW_ICD10_TXT_PATH = r"C:\Users\slk20\Documents\Drug Interaction App\icd10cm-Code Descriptions-2026\icd10cm-codes-2026.txt"
+RAW_ICD10_TXT_PATH = r"icd10cm-codes-2026.txt"
 PREPROCESSED_PARQUET_PATH = "icd10_preprocessed.parquet"
 EMBEDDINGS_NPY_PATH = "disease_embeddings.npy"
 FAISS_INDEX_BIN_PATH = "faiss_index.bin"
