@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import spacy
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 from Drug_Interaction_Backend import load_app_assets, find_best_match_combined, fetch_drug_contraindications
 import requests
 import numpy as np
