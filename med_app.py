@@ -183,7 +183,7 @@ st.markdown("""
 <em>
 <b>Disclaimer:</b> This application is intended for educational and informational purposes only. \
 It is not a substitute for professional medical advice, diagnosis, or treatment. \
-Always seek the advice of a qualified healthcare provider with any questions regarding a medical condition or medication. \
+Please consult a qualified healthcare provider if you have any questions regarding a medical condition or medication. \
 Reliance on any information provided by this app is solely at your own risk. \
 The developers and providers of this app disclaim all liability for any damages or adverse consequences resulting from use of the information herein.
 </em>
